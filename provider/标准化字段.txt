@@ -1,0 +1,17 @@
+下面的所有数据在返回前都需要做标准化处理
+K线
+{time, open, high, low, close, volume}
+time: Unix 时间戳
+open/high/low/close: OHLC 四价
+volume: 成交量
+
+Ticker 行情（fetch_quote / fetch_quotes_batch 返回）
+Standard quote fields (from UStock/TwelveData):
+{last, change, changePercent, high, low, open, previousClose, name, symbol}
+
+last: 最新价
+change: 涨跌额
+changePercent: 涨跌幅 (%)
+previousClose: 昨收价
+name/symbol: 名称和代码
+time: Unix 时间戳
