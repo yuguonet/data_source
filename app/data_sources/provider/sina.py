@@ -15,7 +15,7 @@ API来源 & 最新信息:
   - K线: ✅ 1m/5m/15m/30m/1H/1D（不含1W）
   - fetch_ticker: ✅ 单只实时行情（hq.sinajs.cn）
   - fetch_batch_quotes: ✅ 原生批量（hq.sinajs.cn/list=a,b,c 500只/批）
-  - fetch_market_kline: ✅ 逐只调用fetch_kline
+
 
 单位注意（重要）:
   - fetch_ticker: parts[3]=最新价(元), parts[8]=成交量(股), 不需要×100
@@ -122,12 +122,9 @@ def _parse_sina_quote(text: str) -> Optional[Dict[str, Any]]:
         if last == 0 and prev_close == 0 and open_p == 0:
             return None
         return {
-            "name": name, "open": open_p, "previousClose": prev_close,
-            "last": last, "close": last, "high": high, "low": low,
-            "change": round(last - prev_close, 4) if prev_close else 0.0,
-            "changePercent": round((last - prev_close) / prev_close * 100, 2) if prev_close else 0.0,
-            "volume": volume, "amount": amount, "time": "",
-            "symbol": "",
+            "name": name, "open": open_p, "prev_close": prev_close,
+            "last": last, "high": high, "low": low,
+            "volume": volume, "amount": amount,
         }
     except (ValueError, IndexError):
         return None
@@ -253,24 +250,26 @@ class SinaDataSource:
         self, code: str, timeframe: str = "1D", count: int = 300,
         adj: str = "qfq", timeout: int = 10,
         start_date: str = "", end_date: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         if start_date:
             from app.data_sources.provider import calc_kline_count
             count = calc_kline_count(timeframe, start_date, end_date)
 
         sc = to_sina_code(code)
         if not sc:
-            return []
+            return {}
         scale = _SINA_TF_TO_SCALE.get(timeframe)
         if scale is None:
-            return []
+            return {}
         if timeframe != "1D":
             bars = self._fetch_minute_kline(sc, scale, count, timeout)
         else:
             bars = self._fetch_raw_daily_kline(sc, count, timeout)
         if bars and adj in ("qfq", "hfq"):
             bars = _apply_fwd_adjust(bars, code)
-        return bars
+        if not bars:
+            return {}
+        return {"bars": bars, "count": len(bars)}
 
     def _fetch_raw_daily_kline(self, sc: str, count: int, timeout: int) -> List[Dict[str, Any]]:
         # 优先 money.finance（纯 JSON，稳定），兜底 quotes.sina.cn（JSONP）
@@ -326,29 +325,6 @@ class SinaDataSource:
         except Exception:
             pass
         return []
-
-    def fetch_market_kline(
-        self, timeframe: str, count: int = 300,
-        adj: str = "qfq", timeout: int = 15,
-        start_date: str = "", end_date: str = "",
-        symbols: Optional[List[str]] = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """批量K线 — Coordinator 统管线程+限流，本方法逐只调用 fetch_kline"""
-        if not symbols:
-            return {}
-        result: Dict[str, List[Dict[str, Any]]] = {}
-        for code in symbols:
-            try:
-                bars = self.fetch_kline(
-                    code, timeframe, count,
-                    adj=adj, timeout=timeout,
-                    start_date=start_date, end_date=end_date,
-                )
-                if bars:
-                    result[code] = bars
-            except Exception as e:
-                logger.debug("[fetch_market_kline] %s 失败: %s", code, e)
-        return result
 
     def fetch_ticker(self, code: str, timeout: int = 8) -> Optional[Dict[str, Any]]:
         sc = to_sina_code(code)
@@ -466,12 +442,10 @@ class SinaDataSource:
                 if len(parts) > 31 and parts[30] and parts[31]:
                     time_str = f"{parts[30].strip()} {parts[31].strip()}"
                 result[code_str] = {
-                    "name": name, "last": last, "close": last, "change": chg,
+                    "name": name, "last": last, "change": chg,
                     "changePercent": round(chg / prev_close * 100, 2) if prev_close else 0.0,
                     "open": open_p, "high": high, "low": low,
-                    "previousClose": prev_close, "volume": vol,
-                    "amount": float(parts[9]) if len(parts) > 9 and parts[9] else 0.0,
-                    "time": time_str,
+                    "previousClose": prev_close, "volume": vol, "time": time_str,
                     "symbol": code_str,
                 }
             except (ValueError, IndexError):

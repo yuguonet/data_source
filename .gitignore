@@ -1,2 +1,7 @@
-__pycache__
+.gitignore
+provider/__pycache__/
+__pycache__/
+temp/
 
+test_config.json
+.gitignore

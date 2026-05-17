@@ -14,8 +14,8 @@ API来源 & 最新信息:
 支持的功能:
   - K线: ✅ 全周期 1m/5m/15m/30m/1H/1D/1W（原生前复权）
   - fetch_ticker: ✅ 单只实时行情（quote.json）
-  - fetch_batch_quotes: ⚠️ 逐只并发调_fetch_ticker（非真批量，限流较严）
-  - fetch_market_kline: ✅ 逐只调用fetch_kline
+  - fetch_batch_quotes: ❌ 不支持（返回NotSupportedResult）
+
 
 单位注意（重要）:
   - fetch_kline: r[1]=volume(股), 不需要×100
@@ -260,7 +260,6 @@ def _fetch_ticker(code: str) -> Optional[Dict[str, Any]]:
 
         return {
             "last": last,
-            "close": last,
             "change": chg,
             "changePercent": round(chg / prev * 100, 2) if prev else 0,
             "high": float(quote.get("high", 0) or last),
@@ -268,7 +267,6 @@ def _fetch_ticker(code: str) -> Optional[Dict[str, Any]]:
             "open": float(quote.get("open", 0) or last),
             "previousClose": prev,
             "volume": vol,
-            "amount": 0,
             "time": "",
             "name": quote.get("name", ""),
             "symbol": symbol,
@@ -318,8 +316,7 @@ class XueqiuDataSource:
         "kline_batch_priority": 40,
         "quote": True,
         "quote_priority": 40,
-        "batch_quote": True,
-        "batch_quote_priority": 40,
+        "batch_quote": False,
         "hk": False,
         "markets": {"CNStock"},
     }
@@ -346,59 +343,19 @@ class XueqiuDataSource:
         self, code: str, timeframe: str = "15m", count: int = 200,
         adj: str = "qfq", timeout: int = 10,
         start_date: str = "", end_date: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """获取单只股票K线（前复权），支持 1m/5m/15m/30m/1H/1D/1W"""
         if timeframe not in _XQ_TF_TO_PERIOD:
             return NotSupportedResult(self.name, "fetch_kline", f"不支持 {timeframe} 周期")
 
         data = _fetch_xueqiu_kline(code, timeframe, count)
-        return data if data else []
-
-    def fetch_market_kline(
-        self, timeframe: str, count: int = 300,
-        adj: str = "qfq", timeout: int = 15,
-        start_date: str = "", end_date: str = "",
-        symbols: Optional[List[str]] = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """批量K线 — Coordinator 统管线程+限流，本方法逐只调用 fetch_kline"""
-        if not symbols:
+        if not data:
             return {}
-        result: Dict[str, List[Dict[str, Any]]] = {}
-        for code in symbols:
-            try:
-                bars = self.fetch_kline(
-                    code, timeframe, count,
-                    adj=adj, timeout=timeout,
-                    start_date=start_date, end_date=end_date,
-                )
-                if bars:
-                    result[code] = bars
-            except Exception as e:
-                logger.debug("[fetch_market_kline] %s 失败: %s", code, e)
-        return result
+        return {"bars": data, "count": len(data)}
 
     def fetch_ticker(self, code: str, timeout: int = 8) -> Optional[Dict[str, Any]]:
         """获取单只股票实时行情"""
         return _fetch_ticker(code)
 
     def fetch_batch_quotes(self, codes: List[str], timeout: int = 10) -> Dict[str, Dict[str, Any]]:
-        """不支持批量行情（逐个获取）"""
-        result: Dict[str, Dict[str, Any]] = {}
-        lock = threading.Lock()
-
-        def _fetch(code):
-            q = _fetch_ticker(code)
-            if q:
-                with lock:
-                    result[normalize_cn_code(code)] = q
-
-        max_workers = min(len(codes), 5)
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futs = [pool.submit(_fetch, c) for c in codes]
-            for f in futs:
-                try:
-                    f.result()
-                except Exception:
-                    pass
-
-        return result
+        return NotSupportedResult(self.name, "fetch_batch_quotes")

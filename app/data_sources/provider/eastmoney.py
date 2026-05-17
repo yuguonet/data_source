@@ -15,7 +15,7 @@ API来源 & 最新信息:
   - K线: ✅ 全周期 1m/5m/15m/30m/1H/1D/1W（per-symbol，非原生批量）
   - fetch_ticker: ✅ 单只实时行情
   - fetch_batch_quotes: ✅ 原生全市场批量（clist API 一次6000只）
-  - fetch_market_kline: ✅ 自动路由 — 今天日K走clist批量(1次HTTP) / 其他逐只调fetch_kline
+
 
 单位注意（重要）:
   - fetch_ticker: stock/get API 的价格字段(f43/f44/f45/f46/f60)返回"分"，需÷100
@@ -282,7 +282,7 @@ class EastMoneyDataSource:
         self, code: str, timeframe: str = "1D", count: int = 300,
         adj: str = "qfq", timeout: int = 10,
         start_date: str = "", end_date: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         if start_date:
             from app.data_sources.provider import calc_kline_count
             count = calc_kline_count(timeframe, start_date, end_date)
@@ -291,10 +291,10 @@ class EastMoneyDataSource:
 
         secid = _to_eastmoney_secid(code)
         if not secid:
-            return []
+            return {}
         klt = _EM_KLT.get(timeframe)
         if klt is None:
-            return []
+            return {}
 
         url = f"https://{_EM_KLINE_HOST}/api/qt/stock/kline/get"
 
@@ -315,19 +315,19 @@ class EastMoneyDataSource:
             timeout=timeout,
         )
         if not text:
-            return []
+            return {}
         body = _strip_jsonp(text)
         if not body:
-            return []
+            return {}
         try:
             data = json.loads(body)
         except Exception:
-            return []
+            return {}
         if not isinstance(data, dict):
-            return []
+            return {}
         klines_data = (data.get("data") or {}).get("klines")
         if not isinstance(klines_data, list):
-            return []
+            return {}
 
         out = []
         for line in klines_data:
@@ -355,76 +355,8 @@ class EastMoneyDataSource:
             except (ValueError, TypeError, IndexError):
                 continue
         out.sort(key=lambda x: x["time"])
-        return out[-count:] if len(out) > count else out
-
-    def fetch_market_kline(
-        self, timeframe: str, count: int = 300,
-        adj: str = "qfq", timeout: int = 15,
-        start_date: str = "", end_date: str = "",
-        symbols: Optional[List[str]] = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        批量K线 — 自动选择最优路径。
-
-        路由逻辑:
-          1. 日线 + end_date 是今天（或为空）
-             → 走 clist/get 批量行情API，一次HTTP拿全市场，转单根K线bar
-             → 比逐只拉快几千倍（1次HTTP vs N次HTTP）
-          2. 其他情况
-             → 逐只调用 fetch_kline，由 Coordinator 统管线程和限流
-
-        为什么这样路由:
-          东财 kline/get 是单只接口，无原生批量K线端点。
-          但 clist/get 可一次拿6000只实时行情，转成单根日K bar 完全够用。
-          这是全市场日K快照的最优路径。
-        """
-        if not symbols:
-            return {}
-
-        # ── 快速路径: 今天日K → clist批量行情转K线 ──
-        # 东财 kline/get 是单只接口，逐只拉5000只要5000次HTTP。
-        # clist/get 一次HTTP拿全市场行情，转成单根日K bar，快几千倍。
-        # 适用场景: 全市场日K快照、当日行情加载、count=1的场景。
-        # 不适用: 历史多天K线（clist只返回当天快照）。
-        from datetime import date as _date
-        today_str = _date.today().strftime("%Y-%m-%d")
-        effective_end = end_date if end_date else today_str
-        is_today = effective_end.replace("-", "") == today_str.replace("-", "")
-
-        if timeframe == "1D" and is_today:
-            quotes = self.fetch_batch_quotes(symbols, timeout=timeout)
-            if not quotes:
-                return {}
-            result: Dict[str, List[Dict[str, Any]]] = {}
-            for sym, q in quotes.items():
-                bar = {
-                    "time": today_str,
-                    "open": q.get("open", 0),
-                    "high": q.get("high", 0),
-                    "low": q.get("low", 0),
-                    "close": q.get("last", 0),
-                    "volume": q.get("volume", 0),
-                }
-                if bar["close"] > 0:
-                    result[sym] = [bar]
-            logger.info("[东财] fetch_market_kline 快速路径: %d只日K走clist批量 (%d成功)",
-                        len(symbols), len(result))
-            return result
-
-        # ── 常规路径: 逐只调用 fetch_kline ──
-        result: Dict[str, List[Dict[str, Any]]] = {}
-        for code in symbols:
-            try:
-                bars = self.fetch_kline(
-                    code, timeframe, count,
-                    adj=adj, timeout=timeout,
-                    start_date=start_date, end_date=end_date,
-                )
-                if bars:
-                    result[code] = bars
-            except Exception as e:
-                logger.debug("[fetch_market_kline] %s 失败: %s", code, e)
-        return result
+        out = out[-count:] if len(out) > count else out
+        return {"bars": out, "count": len(out)} if out else {}
 
     def fetch_ticker(self, code: str, timeout: int = 8) -> Optional[Dict[str, Any]]:
         secid = _to_eastmoney_secid(code)
@@ -478,14 +410,13 @@ class EastMoneyDataSource:
         time_str = now.strftime("%Y-%m-%d %H:%M:%S")
         return {
             "last": last,
-            "close": last,
             "change": chg,
             "changePercent": round(chg / prev * 100, 2) if prev else 0.0,
             "high": _f("f44") / 100,
             "low": _f("f45") / 100,
             "open": _f("f46") / 100,
             "previousClose": prev,
-            "volume": vol, "amount": 0, "time": time_str,
+            "volume": vol, "time": time_str,
             "name": str(d.get("f58", "")).strip(),
             "symbol": secid,
         }
@@ -549,7 +480,6 @@ class EastMoneyDataSource:
                 vol = float(item.get("f5", 0) or 0) * 100  # f5返回"手"，×100转"股"
                 result[sym] = {
                     "last": last,
-                    "close": last,
                     "change": chg,
                     "changePercent": round(chg / prev * 100, 2) if prev else 0.0,
                     "high": round(float(item.get("f15", 0)), 4),

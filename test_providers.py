@@ -66,7 +66,7 @@ def _build_mock_app():
     nm.to_raw_digits = to_raw_digits
     sys.modules["app.data_sources.normalizer"] = nm
 
-    sys.path.insert(0, os.path.dirname(__file__))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app", "data_sources"))
     import rate_limiter as _rl
     arl = types.ModuleType("app.data_sources.rate_limiter")
     for a in dir(_rl):
@@ -94,19 +94,24 @@ _build_mock_app()
 # ================================================================
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-PROVIDER_DIR = os.path.join(PROJECT_ROOT, "provider")
+PROVIDER_DIR = os.path.join(PROJECT_ROOT, "app", "data_sources", "provider")
 sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "app", "data_sources"))
 
 import logging
 logging.disable(logging.CRITICAL)
-import provider as _lp; sys.modules["app.data_sources.provider"] = _lp
+sys.path.insert(0, PROVIDER_DIR)
+import importlib
+provider_init = importlib.import_module("__init__")
+sys.modules["app.data_sources.provider"] = provider_init
 for f in os.listdir(PROVIDER_DIR):
-    if f.endswith(".py"):
+    if f.endswith(".py") and f != "__init__.py":
         try:
-            m = importlib.import_module(f"provider.{f[:-3]}")
+            m = importlib.import_module(f[:-3])
             sys.modules[f"app.data_sources.provider.{f[:-3]}"] = m
         except Exception: pass
-from provider import _registry  # noqa: E402
+from importlib import import_module as _imp
+_registry = getattr(provider_init, "_registry", None)
 for f in sorted(os.listdir(PROVIDER_DIR)):
     if f.endswith(".py") and f != "__init__.py":
         n = f"provider.{f[:-3]}"
@@ -303,7 +308,9 @@ def test_kline(providers, codes, timeframe="1D", count=5):
         # 提取有效数据
         has_data = {}
         for name, r in results.items():
-            if r["ok"] and isinstance(r["data"], list) and r["data"]:
+            if r["ok"] and isinstance(r["data"], dict) and r["data"].get("bars"):
+                has_data[name] = r["data"]["bars"]
+            elif r["ok"] and isinstance(r["data"], list) and r["data"]:
                 has_data[name] = r["data"]
 
         if not has_data:
@@ -391,65 +398,14 @@ def test_kline(providers, codes, timeframe="1D", count=5):
 
 
 # ================================================================
-# 测试 4: 批量K线 — 每只股票一个表，行=源，列=指标
-# ================================================================
-
-def test_market_kline(providers, codes):
-    symbols = codes[:3]
-    print(f"\n  📊 [4/4] fetch_market_kline — 批量日K线 (symbols={symbols})\n  {LINE}")
-
-    # 收集各源数据
-    source_results = {}
-    for p in providers:
-        if not hasattr(p, "fetch_market_kline"):
-            source_results[p.name] = (None, p.priority, "不支持该接口")
-            continue
-        r = _run(p.fetch_market_kline, "1D", 3, "qfq", 15, "", "", symbols)
-        source_results[p.name] = (r, p.priority, "")
-
-    # 按股票出表
-    for code in symbols:
-        print(f"\n  ┌─ {code} ─ 批量日K线 ─────────────────────────────────────")
-        print(f"  │ {'源':<14} {'优先级':>4} {'条数':>4} {'最新日期':>12} {'最新收盘':>10} {'耗时':>6}  状态")
-        print(f"  │ {'─'*14} {'─'*4} {'─'*4} {'─'*12} {'─'*10} {'─'*6}  ─────")
-
-        for name, (r, pri, skip_reason) in source_results.items():
-            if skip_reason:
-                print(f"  │ {name:<14} {pri:>4} {'—':>4} {'—':>12} {'—':>10} {'—':>6}  ⏭ {skip_reason}")
-                continue
-            if r is None:
-                continue
-
-            ts = f"{r['t']:.2f}s"
-            if not r["ok"]:
-                err = r["error"][:24]
-                print(f"  │ {name:<14} {pri:>4} {'—':>4} {'—':>12} {'—':>10} {ts:>6}  ❌ {err}")
-                continue
-
-            data = r["data"]
-            bars = _match_code(data, code)
-            if bars and isinstance(bars, list) and len(bars) > 0:
-                last_bar = bars[-1]
-                n = len(bars)
-                dt = _fmt(_bar_field(last_bar, "time", "date"))
-                close = _fmt(_bar_field(last_bar, "close"))
-                print(f"  │ {name:<14} {pri:>4} {n:>4} {dt:>12} {close:>10} {ts:>6}  ✅")
-            else:
-                print(f"  │ {name:<14} {pri:>4} {'0':>4} {'—':>12} {'—':>10} {ts:>6}  ⚠️ 无数据")
-
-        print(f"  └{'─' * (W - 2)}")
-
-
-# ================================================================
 # Main
 # ================================================================
 
-ALL_TESTS = ["ticker", "batch", "kline", "market_kline"]
+ALL_TESTS = ["ticker", "batch", "kline"]
 TEST_MAP = {
     "ticker": test_ticker,
     "batch": test_batch_quotes,
     "kline": test_kline,
-    "market_kline": test_market_kline,
 }
 
 if __name__ == "__main__":
@@ -481,8 +437,6 @@ if __name__ == "__main__":
                 test_batch_quotes(providers, codes)
             elif name == "kline":
                 test_kline(providers, codes, args.tf, args.count)
-            elif name == "market_kline":
-                test_market_kline(providers, codes)
     except Exception as e:
         if args.debug:
             import traceback; traceback.print_exc()

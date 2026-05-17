@@ -171,7 +171,7 @@ class NotSupportedResult:
 
     Attributes:
         source: 不支持该接口的数据源名称
-        interface: 不支持的接口名称（如 "fetch_market_kline"）
+        interface: 不支持的接口名称（如 "fetch_kline"）
         reason: 不支持的原因说明
     """
 
@@ -337,7 +337,7 @@ class BaseDataSource(Protocol):
     所有 Provider 必须实现此协议定义的5个标准接口:
       0. prepare              — 下载前准备（cookie、服务器探测等）
       1. fetch_kline          — 单只K线
-      2. fetch_market_kline   — 全市场批量K线（无需传入代码列表）
+      2. fetch_kline        — 单只K线（由 Coordinator 并发调度实现全市场批量）
       3. fetch_ticker         — 单只行情
       4. fetch_batch_quotes   — 批量行情
 
@@ -352,7 +352,7 @@ class BaseDataSource(Protocol):
         capabilities: 能力声明字典，包含:
             - kline: bool        是否支持K线
             - kline_tf: set      支持的K线周期集合
-            - kline_batch: bool  是否支持全市场批量K线（fetch_market_kline）
+            - kline_batch: bool  是否支持全市场批量K线（由 Coordinator 调度 fetch_kline）
             - quote: bool        是否支持单只行情
             - batch_quote: bool  是否支持批量行情
             - hk: bool           是否支持港股
@@ -386,7 +386,7 @@ class BaseDataSource(Protocol):
         self, code: str, timeframe: str, count: int = 300,
         adj: str = "qfq", timeout: int = 10,
         start_date: str = "", end_date: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         获取单只股票K线数据 — 日/周/分钟共用同一接口。
 
@@ -404,39 +404,12 @@ class BaseDataSource(Protocol):
             end_date:   结束日期（"YYYY-MM-DD"），部分数据源支持精确截断
 
         Returns:
-            K线数据列表，每个元素包含 time/open/high/low/close/volume。
-            失败或无数据返回空列表。
-            不支持返回 NotSupportedResult。
+            成功: {"bars": List[Dict], "count": int} — bars 每个元素含 time/open/high/low/close/volume
+            失败: {}
+            不支持: NotSupportedResult
 
         Raises:
-            不抛出异常，内部捕获所有异常并返回空列表。
-        """
-        ...
-
-    def fetch_market_kline(
-        self, timeframe: str, count: int = 300,
-        adj: str = "qfq", timeout: int = 15,
-        start_date: str = "", end_date: str = "",
-        symbols: Optional[List[str]] = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        全市场批量K线。
-
-        路由逻辑:
-          - end_date 是今天（或为空）→ 走 fetch_batch_quotes（1 HTTP 拿 N 只行情，转单根 bar）
-          - end_date 是过去日期 → 并发调用 fetch_kline（每只 1 HTTP）
-
-        Args:
-            timeframe: K线周期
-            count:     每只股票的数据条数（None 时走批量行情快照路径）
-            adj:       复权方式
-            timeout:   请求超时秒数
-            start_date: 起始日期（"YYYY-MM-DD"），提供时用交易日历反推 count
-            end_date:   结束日期（"YYYY-MM-DD"），为空则取今天
-            symbols:    股票代码列表，为 None 时自动从 DB 获取全市场 active 股票
-
-        Returns:
-            {code: kline_bars} — 仅包含成功获取的代码。
+            不抛出异常，内部捕获所有异常并返回空 dict。
         """
         ...
 
@@ -449,7 +422,7 @@ class BaseDataSource(Protocol):
             timeout: 请求超时秒数
 
         Returns:
-            行情字典，字段与 fetch_batch_quotes 单条记录一致。
+            行情字典，包含 last/change/changePercent/high/low/open/previousClose/name/symbol。
             失败返回 None。
             不支持返回 NotSupportedResult。
         """
@@ -466,21 +439,6 @@ class BaseDataSource(Protocol):
         Returns:
             {code: quote_dict} — 仅包含成功获取的代码。
             不支持返回 NotSupportedResult。
-
-        标准返回字段（与 K线格式统一）:
-            last:        最新价（元）
-            close:       = last（与 kline 统一）
-            open:        开盘价（元）
-            high:        最高价（元）
-            low:         最低价（元）
-            previousClose: 昨收（元）
-            change:      涨跌额
-            changePercent: 涨跌幅(%)
-            volume:      成交量（股）
-            amount:      成交额（元），无数据时为 0
-            time:        "YYYY-MM-DD HH:MM:SS" 或 "YYYY-MM-DD"
-            name:        股票名称
-            symbol:      代码
         """
         ...
 

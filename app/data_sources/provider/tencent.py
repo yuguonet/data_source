@@ -14,7 +14,7 @@ API来源 & 最新信息:
   - K线: ✅ 全周期 1m/5m/15m/30m/1H/1D/1W
   - fetch_ticker: ✅ 单只实时行情（qt.gtimg.cn）
   - fetch_batch_quotes: ✅ 原生批量（qt.gtimg.cn/q=a,b,c 500只/批）
-  - fetch_market_kline: ✅ 逐只调用fetch_kline
+
   - 港股: ✅ 支持港股K线和行情
 
 单位注意（重要）:
@@ -192,18 +192,18 @@ class TencentDataSource:
         self, code: str, timeframe: str = "1D", count: int = 300,
         adj: str = "qfq", timeout: int = 10,
         start_date: str = "", end_date: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         if start_date:
             from app.data_sources.provider import calc_kline_count
             count = calc_kline_count(timeframe, start_date, end_date)
 
         c = _lower(to_tencent_code(code))
         if not c:
-            return []
+            return {}
 
         endpoint, tc_tf = _TF_MAP.get(timeframe, (None, None))
         if not endpoint:
-            return []
+            return {}
 
         if endpoint == "mkline":
             url = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
@@ -219,21 +219,21 @@ class TencentDataSource:
 
         if resp.status_code != 200:
             logger.warning("[tencent] %s %s HTTP %s", timeframe, c, resp.status_code)
-            return []
+            return {}
 
         try:
             data = resp.json()
         except Exception:
             logger.warning("[tencent] %s %s JSON解析失败, body前100字: %s", timeframe, c, (resp.text or "")[:100])
-            return []
+            return {}
 
         if not isinstance(data, dict) or int(data.get("code", 0)) != 0:
-            return []
+            return {}
 
         root = (data.get("data") or {}).get(c)
         if not isinstance(root, dict):
             logger.warning("[tencent] %s %s root不是dict, data.keys=%s", timeframe, c, list((data.get("data") or {}).keys()))
-            return []
+            return {}
 
         rows = None
         if endpoint == "mkline":
@@ -248,30 +248,10 @@ class TencentDataSource:
                         rows = v
                         break
 
-        return _rows_to_dicts(rows, timeframe) if isinstance(rows, list) else []
-
-    def fetch_market_kline(
-        self, timeframe: str, count: int = 300,
-        adj: str = "qfq", timeout: int = 15,
-        start_date: str = "", end_date: str = "",
-        symbols: Optional[List[str]] = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """批量K线 — Coordinator 统管线程+限流，本方法逐只调用 fetch_kline"""
-        if not symbols:
+        bars = _rows_to_dicts(rows, timeframe) if isinstance(rows, list) else []
+        if not bars:
             return {}
-        result: Dict[str, List[Dict[str, Any]]] = {}
-        for code in symbols:
-            try:
-                bars = self.fetch_kline(
-                    code, timeframe, count,
-                    adj=adj, timeout=timeout,
-                    start_date=start_date, end_date=end_date,
-                )
-                if bars:
-                    result[code] = bars
-            except Exception as e:
-                logger.debug("[fetch_market_kline] %s 失败: %s", code, e)
-        return result
+        return {"bars": bars, "count": len(bars)}
 
     def fetch_ticker(self, code: str, timeout: int = 8) -> Optional[Dict[str, Any]]:
         c = _lower(to_tencent_code(code))
@@ -317,11 +297,11 @@ class TencentDataSource:
         if len(raw_time) == 14 and raw_time.isdigit():
             time_str = f"{raw_time[:4]}-{raw_time[4:6]}-{raw_time[6:8]} {raw_time[8:10]}:{raw_time[10:12]}:{raw_time[12:14]}"
         return {
-            "last": last, "close": last, "change": chg,
+            "last": last, "change": chg,
             "changePercent": round(chg / prev * 100, 2) if prev else 0,
             "high": _f(33, last), "low": _f(34, last),
             "open": _f(5) or last, "previousClose": prev,
-            "volume": vol * 100, "amount": 0, "time": time_str,
+            "volume": vol * 100, "time": time_str,
             "name": (parts[1] or "").strip(),
             "symbol": (parts[2] or "").strip(),
         }
@@ -399,14 +379,13 @@ class TencentDataSource:
                         if len(raw_time) == 14 and raw_time.isdigit():
                             time_str = f"{raw_time[:4]}-{raw_time[4:6]}-{raw_time[6:8]} {raw_time[8:10]}:{raw_time[10:12]}:{raw_time[12:14]}"
                         result[c] = {
-                            "last": last, "close": last, "change": chg,
+                            "last": last, "change": chg,
                             "changePercent": round(chg / prev * 100, 2) if prev else 0,
                             "high": float(parts[33]) if len(parts) > 33 and parts[33] else last,
                             "low": float(parts[34]) if len(parts) > 34 and parts[34] else last,
                             "open": float(parts[5]) if parts[5] else last,
                             "previousClose": prev,
                             "volume": vol * 100,
-                            "amount": 0,
                             "time": time_str,
                             "name": parts[1].strip(),
                             "symbol": parts[2].strip(),

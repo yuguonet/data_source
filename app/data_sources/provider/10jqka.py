@@ -24,7 +24,7 @@ API来源 & 最新信息:
   - K线 日/周: ✅ 1D/1W（/v2/line/ 接口，历史数据）
   - fetch_ticker: ✅ 单只实时行情（取K线最后一条）
   - fetch_batch_quotes: ❌ 不支持（返回NotSupportedResult）
-  - fetch_market_kline: ✅ 逐只调用fetch_kline
+
 
 单位注意（重要）:
   - /v2/line/ K线: volume(parts[5])直接是"股"，价格"元"
@@ -62,6 +62,12 @@ _THS_MIN_TFS = {"1m", "5m", "15m", "30m", "1H"}
 
 def _to_ths_params(code):
     market, digits = detect_market(code)
+    # detect_market 无法识别无前缀代码(如 "999999")，尝试加前缀后再检测
+    if not market:
+        from app.data_sources.normalizer import add_market_prefix
+        prefixed = add_market_prefix(code, "CNStock")
+        if prefixed != code:
+            market, digits = detect_market(prefixed)
     if not market or not digits: return None
     mkt = _THS_MARKET.get(market)
     if mkt is None: return None
@@ -211,36 +217,37 @@ class ThsDataSource:
                     "kline_batch": True, "quote": True, "quote_priority": 25,
                     "batch_quote": False, "batch_quote_priority": 30, "hk": False, "markets": {"CNStock"}}
 
-    def fetch_kline(self, code, timeframe="1D", count=300, adj="qfq", timeout=10, start_date="", end_date=""):
+    def fetch_kline(self, code, timeframe="1D", count=300, adj="qfq", timeout=10, start_date="", end_date="") -> Dict[str, Any]:
         if start_date:
             from app.data_sources.provider import calc_kline_count; count = calc_kline_count(timeframe, start_date, end_date)
         params = _to_ths_params(code)
-        if not params: return []
+        if not params: return {}
         mkt, digits = params
 
         # ── 分钟级: /v2/time/ 分时接口 + 聚合 ──
         if timeframe in _THS_MIN_TFS:
             tick_bars = _fetch_ths_time_data(digits, timeout=timeout)
-            if not tick_bars: return []
+            if not tick_bars: return {}
             bars = _aggregate_tick_bars(tick_bars, timeframe)
-            if not bars: return []
+            if not bars: return {}
             # 前复权
             if adj in ("qfq", "hfq"):
                 bars = _apply_fwd_adjust(bars, code)
-            return bars[-count:] if len(bars) > count else bars
+            result = bars[-count:] if len(bars) > count else bars
+            return {"bars": result, "count": len(result)}
 
         # ── 日/周/月: /v2/line/ K线接口 ──
         period = _THS_PERIOD.get(timeframe)
-        if period is None: return []
+        if period is None: return {}
         p_str = str(period).zfill(2) if period < 10 else str(period)
         url = "https://d.10jqka.com.cn/v2/line/hs_{}/{}/last{}.js".format(digits, p_str, min(int(count), 800))
         try:
             resp = get_shared_session().get(url, headers=get_request_headers(referer="https://stockpage.10jqka.com/"), timeout=timeout)
             resp.encoding = "utf-8"; text = resp.text or ""
-        except Exception as e: logger.warning("[同花顺K线] 请求失败 %s: %s", code, e); return []
+        except Exception as e: logger.warning("[同花顺K线] 请求失败 %s: %s", code, e); return {}
         m = re.search(r'"data"\s*:\s*"([^"]+)"', text)
         if not m: m = re.search(r'"([^"]*\d{8}[^"]*)"', text)
-        if not m: return []
+        if not m: return {}
         raw = m.group(1); out = []
         for seg in raw.split(";"):
             seg = seg.strip()
@@ -265,30 +272,7 @@ class ThsDataSource:
             out = out[-count:]
         if adj in ("qfq", "hfq"):
             out = _apply_fwd_adjust(out, code)
-        return out
-
-    def fetch_market_kline(
-        self, timeframe: str, count: int = 300,
-        adj: str = "qfq", timeout: int = 15,
-        start_date: str = "", end_date: str = "",
-        symbols: Optional[List[str]] = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """批量K线 — Coordinator 统管线程+限流，本方法逐只调用 fetch_kline"""
-        if not symbols:
-            return {}
-        result: Dict[str, List[Dict[str, Any]]] = {}
-        for code in symbols:
-            try:
-                bars = self.fetch_kline(
-                    code, timeframe, count,
-                    adj=adj, timeout=timeout,
-                    start_date=start_date, end_date=end_date,
-                )
-                if bars:
-                    result[code] = bars
-            except Exception as e:
-                logger.debug("[fetch_market_kline] %s 失败: %s", code, e)
-        return result
+        return {"bars": out, "count": len(out)} if out else {}
 
     def fetch_ticker(self, code, timeout=8):
         params = _to_ths_params(code)
@@ -319,10 +303,9 @@ class ThsDataSource:
             vol = float(parts[5]) if len(parts) > 5 else 0
         except (ValueError, IndexError): return None
         if last <= 0: return None
-        return {"last": last, "close": last, "change": 0, "changePercent": 0,
+        return {"last": last, "change": 0, "changePercent": 0,
                 "high": high, "low": low, "open": open_p, "previousClose": 0,
-                "volume": vol, "amount": 0, "time": "",
-                "name": data.get("name", ""), "symbol": f"{digits}"}
+                "volume": vol, "name": data.get("name", ""), "symbol": f"{digits}"}
 
     def fetch_batch_quotes(self, codes, timeout=10):
         return NotSupportedResult(self.name, "fetch_batch_quotes")

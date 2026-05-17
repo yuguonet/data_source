@@ -14,7 +14,7 @@ API来源 & 最新信息:
   - K线: ✅ 全周期 1m/5m/15m/30m/1H/4H/1D/1W（含4H，国内源没有）
   - fetch_ticker: ✅ 单只实时行情
   - fetch_batch_quotes: ❌ 不支持
-  - fetch_market_kline: ✅ 逐只调用fetch_kline
+
   - 港股: ✅ 支持（HKEX）
 
 单位注意（重要）:
@@ -192,7 +192,7 @@ class TwelveDataSource:
         self, code: str, timeframe: str = "1D", count: int = 300,
         adj: str = "qfq", timeout: int = 15,
         start_date: str = "", end_date: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         if start_date:
             from app.data_sources.provider import calc_kline_count
             count = calc_kline_count(timeframe, start_date, end_date)
@@ -200,7 +200,7 @@ class TwelveDataSource:
         api_key = _get_api_key()
         if not api_key:
             logger.debug("[TwelveData] API Key 未配置，跳过")
-            return []
+            return {}
 
         interval = _TD_INTERVAL_MAP.get(timeframe)
         if not interval:
@@ -227,41 +227,19 @@ class TwelveDataSource:
                     time.sleep(min(_BACKOFF_CAP_SEC, _BACKOFF_BASE_SEC * (2 ** attempt)))
                     continue
                 logger.debug("[TwelveData] K线失败 %s/%s tf=%s: %s", symbol, exchange, timeframe, e)
-                return []
+                return {}
         else:
-            return []
+            return {}
 
         if data.get("status") != "ok" or "values" not in data:
             msg = data.get("message", "")
             code_err = data.get("code", "")
             if code_err == 429 or "API credits" in msg or "minute limit" in msg:
                 logger.warning("[TwelveData] 频率限制 %s/%s: %s", symbol, exchange, msg)
-            return []
-
-        return _parse_td_kline(data["values"], count, timeframe)
-
-    def fetch_market_kline(
-        self, timeframe: str, count: int = 300,
-        adj: str = "qfq", timeout: int = 15,
-        start_date: str = "", end_date: str = "",
-        symbols: Optional[List[str]] = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """批量K线 — 逐只调用 fetch_kline"""
-        if not symbols:
             return {}
-        result: Dict[str, List[Dict[str, Any]]] = {}
-        for code in symbols:
-            try:
-                bars = self.fetch_kline(
-                    code, timeframe, count,
-                    adj=adj, timeout=timeout,
-                    start_date=start_date, end_date=end_date,
-                )
-                if bars:
-                    result[code] = bars
-            except Exception as e:
-                logger.debug("[fetch_market_kline] %s 失败: %s", code, e)
-        return result
+
+        bars = _parse_td_kline(data["values"], count, timeframe)
+        return {"bars": bars, "count": len(bars)} if bars else {}
 
     def fetch_ticker(self, code: str, timeout: int = 8) -> Optional[Dict[str, Any]]:
         api_key = _get_api_key()
@@ -298,13 +276,12 @@ class TwelveDataSource:
         chg = round(last - prev, 4) if prev else 0.0
 
         return {
-            "last": last, "close": last, "change": chg,
+            "last": last, "change": chg,
             "changePercent": round(chg / prev * 100, 2) if prev else 0.0,
             "high": float(data.get("high", 0) or 0),
             "low": float(data.get("low", 0) or 0),
             "open": float(data.get("open", 0) or 0),
             "previousClose": prev,
-            "volume": 0, "amount": 0, "time": "",
             "name": str(data.get("name", "") or ""),
             "symbol": f"{symbol}.{exchange}",
         }

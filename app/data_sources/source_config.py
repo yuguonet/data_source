@@ -290,6 +290,7 @@ SOURCE_CONFIGS: Dict[str, SourceConfig] = {
         batch_capable=True,
         batch_size=50,
     ),
+    
 }
 
 
