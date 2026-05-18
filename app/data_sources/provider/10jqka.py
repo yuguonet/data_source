@@ -61,15 +61,19 @@ _THS_PERIOD = {"1D": 1, "1W": 10}
 _THS_MIN_TFS = {"1m", "5m", "15m", "30m", "1H"}
 
 def _to_ths_params(code):
-    market, digits = detect_market(code)
-    # detect_market 无法识别无前缀代码(如 "999999")，尝试加前缀后再检测
-    if not market:
+    digits = to_raw_digits(code)
+    upper = code.strip().upper()
+    # 提取交易所前缀 SH/SZ/BJ
+    prefix = upper[:2] if upper[:2] in ("SH", "SZ", "BJ") else ""
+    # 无前缀时尝试自动补全
+    if not prefix:
         from app.data_sources.normalizer import add_market_prefix
         prefixed = add_market_prefix(code, "CNStock")
         if prefixed != code:
-            market, digits = detect_market(prefixed)
-    if not market or not digits: return None
-    mkt = _THS_MARKET.get(market)
+            prefix = prefixed[:2].upper()
+            digits = to_raw_digits(prefixed)
+    if not prefix or not digits: return None
+    mkt = _THS_MARKET.get(prefix)
     if mkt is None: return None
     return (mkt, digits)
 

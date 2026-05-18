@@ -548,7 +548,9 @@ class Coordinator:
                 logger.debug("[协助层] kline %s %s 超时 (%ss)", name, pure_symbol, elapsed)
             except Exception as e:
                 elapsed = time.time() - start
-                _realtime_cb.record_failure(name, str(e))
+                # 熔断只对超时计数
+                if elapsed > PER_TASK_TIMEOUT:
+                    _realtime_cb.record_failure(name, str(e))
                 cfg.record(False, elapsed)
                 logger.debug("[协助层] kline %s %s 失败: %s", name, pure_symbol, e)
 
@@ -674,13 +676,15 @@ class Coordinator:
                             result_holder.append((source_name, result))
                             done_event.set()
                 else:
-                    _realtime_cb.record_failure(source_name, "empty")
+                    # 空结果不算熔断
                     cfg = get_source_config(source_name)
                     cfg.record(False, elapsed)
             except Exception as e:
-                _realtime_cb.record_failure(source_name, str(e))
+                # 熔断只对超时计数
+                if elapsed > PER_TASK_TIMEOUT:
+                    _realtime_cb.record_failure(source_name, str(e))
                 cfg = get_source_config(source_name)
-                cfg.record(False, 0)
+                cfg.record(False, elapsed)
                 logger.debug("[协助层] ticker %s %s 失败: %s", source_name, symbol, e)
 
         pool = concurrent.futures.ThreadPoolExecutor(
@@ -817,10 +821,12 @@ class Coordinator:
         group_size = self._BATCH_GROUP_SIZE  # 500
 
         # ── 第二步: 确定每个源的线程数 ──
+        # 由源 MAX_CONCURRENCY 决定，没有的只开1个线程并警告
         source_threads: Dict[str, int] = {}
         for p in available:
             mc = getattr(p, 'max_concurrency', None)
             if mc is None:
+                logger.warning("[batch_quotes] %s 未定义 MAX_CONCURRENCY，默认开1个线程", p.name)
                 mc = 1
             source_threads[p.name] = mc
 
@@ -921,13 +927,33 @@ class Coordinator:
 
             return batch if batch else None
 
-        def _return_to_retry(sym: str, source_name: str):
-            """将单个 symbol 放回重试池，标记源失败。所有源都试过 → 彻底失败。"""
+        def _return_to_retry(sym: str, source_name: str, is_invalid: bool = False):
+            """
+            将单个 symbol 放回重试池，标记源失败。
+
+            Args:
+                is_invalid: True = 源返回了明确的错误代码（空dict等），
+                            不放重试池，直接记彻底失败。
+            """
+            # 明确的错误代码 → 不重试，直接彻底失败
+            if is_invalid:
+                with permanent_fail_set_lock:
+                    permanent_fail.add(sym)
+                with permanent_fail_lock:
+                    permanent_fail_count[0] += 1
+                with done_lock:
+                    done_count[0] += 1
+                _check_done()
+                return
+
+            # 正常失败流程：加锁 → 标记 → 检查是否超过1/2活源试过
             with source_fails_lock:
                 source_fails[source_name].add(sym)
                 fail_count = sum(1 for src in available if sym in source_fails[src.name])
 
-            if fail_count >= num_sources:
+            # 超过1/2活源（未熔断）试过就彻底失败
+            active_count = sum(1 for src in available if _realtime_cb.is_available(src.name))
+            if active_count > 0 and fail_count * 2 > active_count:
                 with permanent_fail_set_lock:
                     permanent_fail.add(sym)
                 with permanent_fail_lock:
@@ -991,6 +1017,7 @@ class Coordinator:
                 except concurrent.futures.TimeoutError:
                     elapsed = time.time() - start
                     _fetch_future.cancel()
+                    # 硬超时 → 熔断计数
                     _realtime_cb.record_failure(source_name, "hard_timeout")
                     cfg = get_source_config(source_name)
                     cfg.record(False, elapsed)
@@ -1009,6 +1036,17 @@ class Coordinator:
                         source_stats[source_name]["fail"] += 1
                     for sym in batch:
                         _return_to_retry(sym, source_name)
+                    return False
+
+                # 空 dict → 源返回明确的错误代码（不是"没数据"，是"这些代码无效"）
+                # 不放重试池，直接记彻底失败
+                if isinstance(task_result, dict) and len(task_result) == 0:
+                    cfg = get_source_config(source_name)
+                    cfg.record(False, elapsed)
+                    with stats_lock:
+                        source_stats[source_name]["fail"] += 1
+                    for sym in batch:
+                        _return_to_retry(sym, source_name, is_invalid=True)
                     return False
 
                 # 有返回数据 → 逐 symbol 处理
@@ -1055,7 +1093,9 @@ class Coordinator:
             except Exception as e:
                 elapsed = time.time() - start
                 is_timeout = elapsed > _PER_TASK_TIMEOUT
-                _realtime_cb.record_failure(source_name, str(e))
+                # 熔断只对超时计数，错误代码和没数据的不进行计数
+                if is_timeout:
+                    _realtime_cb.record_failure(source_name, str(e))
                 cfg = get_source_config(source_name)
                 cfg.record(False, elapsed)
                 with stats_lock:
@@ -1071,6 +1111,11 @@ class Coordinator:
             """长效线程主循环 — 不断取批次，处理，直到 stop。"""
             name = provider.name
             while not stop.is_set():
+                # 源被熔断 → 暂停等待，不抢任务
+                if not _realtime_cb.is_available(name):
+                    if stop.wait(timeout=5.0):
+                        break
+                    continue
                 batch = _get_batch(name)
                 if batch is None:
                     if stop.wait(timeout=2.0):
@@ -1358,19 +1403,34 @@ class Coordinator:
                     retry_pool.append(item)
                 return found
 
-        def _return_to_retry(sym: str, source_name: str):
+        def _return_to_retry(sym: str, source_name: str, is_invalid: bool = False):
             """
             将 symbol 放入重试池（失败/超时后归还）。
 
-            记录到该源的失败表。检查所有源是否都已试过此 symbol → 是则彻底失败。
+            记录到该源的失败表。检查是否超过1/2活源试过此 symbol → 是则彻底失败。
+
+            Args:
+                is_invalid: True = 源返回了明确的错误代码，不放重试池，直接彻底失败。
             """
+            # 明确的错误代码 → 不重试，直接彻底失败
+            if is_invalid:
+                with permanent_fail_set_lock:
+                    permanent_fail.add(sym)
+                with permanent_fail_lock:
+                    permanent_fail_count[0] += 1
+                with done_lock:
+                    done_count[0] += 1
+                _check_done()
+                return
+
+            # 正常失败流程：加锁 → 标记 → 检查是否超过1/2活源试过
             with source_fails_lock:
                 source_fails[source_name].add(sym)
-                # 统计多少个源在此 symbol 上失败了
                 fail_count = sum(1 for src in available if sym in source_fails[src.name])
 
-            # 4个源试过就记为彻底失败，从重试池删除
-            if fail_count >= 4:
+            # 超过1/2活源（未熔断）试过就彻底失败
+            active_count = sum(1 for src in available if _realtime_cb.is_available(src.name))
+            if active_count > 0 and fail_count * 2 > active_count:
                 with permanent_fail_set_lock:
                     permanent_fail.add(sym)
                 with permanent_fail_lock:
@@ -1482,7 +1542,9 @@ class Coordinator:
             except Exception as e:
                 elapsed = time.time() - start
                 is_timeout = elapsed > _PER_TASK_TIMEOUT
-                _realtime_cb.record_failure(source_name, str(e))
+                # 熔断只对超时计数，错误代码和没数据的不进行计数
+                if is_timeout:
+                    _realtime_cb.record_failure(source_name, str(e))
                 cfg = get_source_config(source_name)
                 cfg.record(False, elapsed)
                 with stats_lock:
@@ -1500,9 +1562,15 @@ class Coordinator:
             线程不因单次失败退出，持续循环取下一个任务。
             超时后自动将 symbol 归还重试池，标记源失败，继续下一个。
             池子空了等待通知，有新 symbol（重试池被放回）时继续工作。
+            源被熔断时暂停等待，不抢任务。
             """
             name = provider.name
             while not stop.is_set():
+                # 源被熔断 → 暂停等待，不抢任务
+                if not _realtime_cb.is_available(name):
+                    if stop.wait(timeout=5.0):
+                        break
+                    continue
                 sym = _get_symbol(name)
                 if sym is None:
                     # 池子空了，等待: 可能有新 symbol 被放回重试池，或 stop 信号

@@ -210,8 +210,9 @@ def _fetch_sohu_kline(code: str, period: str = "d", limit: int = 200) -> Optiona
         except (ValueError, TypeError, IndexError):
             continue
 
-    # 搜狐返回最新在前，取前 limit 条即可
-    return result[:limit] if limit and len(result) > limit else result
+    # 搜狐返回最新在前，反转为最旧在前（与其他源一致），取最近 limit 条
+    result.reverse()
+    return result[-limit:] if limit and len(result) > limit else result
 
 
 def _parse_minute_timestamp(ts: str) -> str:
