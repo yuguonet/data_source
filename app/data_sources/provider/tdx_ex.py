@@ -697,18 +697,24 @@ class TdxExDataSource:
         if not self._live_servers:
             return NotSupportedResult(self.name, "fetch_kline", "无可用服务器")
 
+        fetch_count = count
         if start_date:
             from app.data_sources.provider import calc_kline_count
-            count = calc_kline_count(timeframe, start_date, end_date)
+            fetch_count = calc_kline_count(timeframe, start_date, end_date)
 
-        data = self._fetch_kline_raw(code, timeframe, count)
+        data = self._fetch_kline_raw(code, timeframe, fetch_count)
         if not data:
             return {}
+
+        # 日期过滤
+        from app.data_sources.provider import filter_bars_by_date
+        if start_date or end_date:
+            data = filter_bars_by_date(data, start_date, end_date)
 
         if adj == "qfq":
             data = _apply_fwd_adjust(data, code)
 
-        return {"bars": data, "count": len(data)}
+        return {"bars": data, "count": len(data)} if data else {}
 
     def fetch_ticker(self, code: str, timeout: int = 8) -> Optional[Dict[str, Any]]:
         """获取单只股票实时行情"""

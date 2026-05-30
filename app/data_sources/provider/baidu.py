@@ -284,10 +284,18 @@ class BaiduDataSource:
         if not ktype:
             return NotSupportedResult(self.name, "fetch_kline", f"百度API不支持 {timeframe}，仅支持 {set(self._TF_MAP.keys())}")
 
-        data = _fetch_baidu_kline(code, ktype=ktype, limit=count)
+        data = _fetch_baidu_kline(code, ktype=ktype, limit=0)  # 先取全量
         if not data:
             return {}
-        return {"bars": data, "count": len(data)}
+
+        # 日期过滤
+        from app.data_sources.provider import filter_bars_by_date
+        if start_date or end_date:
+            data = filter_bars_by_date(data, start_date, end_date)
+        elif count and len(data) > count:
+            data = data[-count:]
+
+        return {"bars": data, "count": len(data)} if data else {}
 
     def fetch_ticker(self, code: str, timeout: int = 8) -> Optional[Dict[str, Any]]:
         """获取单只股票实时行情"""

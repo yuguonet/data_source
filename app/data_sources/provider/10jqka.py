@@ -244,7 +244,9 @@ class ThsDataSource:
         period = _THS_PERIOD.get(timeframe)
         if period is None: return {}
         p_str = str(period).zfill(2) if period < 10 else str(period)
-        url = "https://d.10jqka.com.cn/v2/line/hs_{}/{}/last{}.js".format(digits, p_str, min(int(count), 800))
+        # 有日期范围时用大窗口取全量再过滤，否则按 count 取
+        fetch_limit = 5000 if (start_date or end_date) else min(int(count), 800)
+        url = "https://d.10jqka.com.cn/v2/line/hs_{}/{}/last{}.js".format(digits, p_str, fetch_limit)
         try:
             resp = get_shared_session().get(url, headers=get_request_headers(referer="https://stockpage.10jqka.com/"), timeout=timeout)
             resp.encoding = "utf-8"; text = resp.text or ""
@@ -272,7 +274,11 @@ class ThsDataSource:
                 out.append({"time": ts, "open": round(o, 4), "high": round(h, 4), "low": round(l, 4), "close": round(c, 4), "volume": round(v, 2)})
             except (ValueError, TypeError, IndexError): continue
         out.sort(key=lambda x: x["time"])
-        if len(out) > count:
+        # 日期过滤
+        if start_date or end_date:
+            from app.data_sources.provider import filter_bars_by_date
+            out = filter_bars_by_date(out, start_date, end_date)
+        elif len(out) > count:
             out = out[-count:]
         if adj in ("qfq", "hfq"):
             out = _apply_fwd_adjust(out, code)

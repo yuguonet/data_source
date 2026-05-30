@@ -210,7 +210,10 @@ class TencentDataSource:
             params = {"param": f"{c},{tc_tf},{int(count)}"}
         else:
             url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-            params = {"param": f"{c},{tc_tf},,,{int(count)},{adj or 'qfq'}"}
+            # fqkline 原生支持日期范围: param=code,period,start,end,count,adj
+            sd = start_date if start_date else ""
+            ed = end_date if end_date else ""
+            params = {"param": f"{c},{tc_tf},{sd},{ed},{int(count)},{adj or 'qfq'}"}
 
         resp = requests.get(
             url, headers=get_request_headers(referer=_tc_kline_referers.next()),

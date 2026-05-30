@@ -212,6 +212,11 @@ class TwelveDataSource:
             "outputsize": min(int(count), 5000),
             "apikey": api_key, "format": "JSON", "dp": "4",
         }
+        # 原生日期范围参数
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
 
         for attempt in range(_MAX_ATTEMPTS):
             try:

@@ -144,6 +144,14 @@ class CircuitBreaker:
                 return True
             return False
 
+    def remaining_cooldown(self, source: str) -> float:
+        """返回源的剩余冷却时间（秒），未熔断返回 0"""
+        with self._lock:
+            if self._state.get(source) != self._OPEN:
+                return 0.0
+            elapsed = time.time() - self._tripped_at[source]
+            return max(0.0, self._cooldown_seconds - elapsed)
+
     def record_success(self, source: str):
         with self._lock:
             self._failures[source] = 0
@@ -1110,19 +1118,25 @@ class Coordinator:
         def _worker(provider):
             """长效线程主循环 — 不断取批次，处理，直到 stop。"""
             name = provider.name
+            _cb_warned = False
             while not stop.is_set():
                 # 源被熔断 → 暂停等待，不抢任务
                 if not _realtime_cb.is_available(name):
+                    if not _cb_warned:
+                        remaining = _realtime_cb.remaining_cooldown(name)
+                        logger.warning("[batch_quotes] %s 已熔断，等待冷却恢复 (剩余 %.0fs)", name, remaining)
+                        _cb_warned = True
                     if stop.wait(timeout=5.0):
                         break
                     continue
+                if _cb_warned:
+                    logger.info("[batch_quotes] %s 冷却结束，恢复工作", name)
+                    _cb_warned = False
                 batch = _get_batch(name)
                 if batch is None:
-                    if stop.wait(timeout=2.0):
+                    if stop.wait(timeout=3.0):
                         break
-                    batch = _get_batch(name)
-                    if batch is None:
-                        break
+                    continue
                 _process_batch(name, provider, batch)
 
         # ── 第五步: 启动线程池 ──
@@ -1565,21 +1579,28 @@ class Coordinator:
             源被熔断时暂停等待，不抢任务。
             """
             name = provider.name
+            _cb_warned = False
             while not stop.is_set():
                 # 源被熔断 → 暂停等待，不抢任务
                 if not _realtime_cb.is_available(name):
+                    if not _cb_warned:
+                        remaining = _realtime_cb.remaining_cooldown(name)
+                        logger.warning("[market_kline] %s 已熔断，等待冷却恢复 (剩余 %.0fs)", name, remaining)
+                        _cb_warned = True
                     if stop.wait(timeout=5.0):
                         break
                     continue
+                if _cb_warned:
+                    logger.info("[market_kline] %s 冷却结束，恢复工作", name)
+                    _cb_warned = False
                 sym = _get_symbol(name)
                 if sym is None:
                     # 池子空了，等待: 可能有新 symbol 被放回重试池，或 stop 信号
-                    if stop.wait(timeout=2.0):
+                    # 不能退出 — 其他 worker 可能正在处理 symbol 并即将放回重试池
+                    # 只靠 stop 信号退出
+                    if stop.wait(timeout=3.0):
                         break
-                    # 再试一次取 symbol
-                    sym = _get_symbol(name)
-                    if sym is None:
-                        break  # 真的没有了，退出
+                    continue
                 _try_fetch(name, provider, sym)
 
         # ── 第六步: 启动线程池 ──

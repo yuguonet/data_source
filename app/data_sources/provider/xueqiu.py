@@ -348,10 +348,27 @@ class XueqiuDataSource:
         if timeframe not in _XQ_TF_TO_PERIOD:
             return NotSupportedResult(self.name, "fetch_kline", f"不支持 {timeframe} 周期")
 
-        data = _fetch_xueqiu_kline(code, timeframe, count)
+        # 有日期范围时，取大窗口数据再过滤（雪球支持负数 count 往前取）
+        fetch_count = count
+        if start_date:
+            # 雪球 API 用 count=-N 从当前往前取，要取够覆盖 start_date
+            from datetime import datetime, timezone, timedelta
+            today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+            from app.data_sources.provider import calc_kline_count
+            # 算从 start_date 到今天需要多少根
+            fetch_count = calc_kline_count(timeframe, start_date, today)
+            fetch_count = min(fetch_count + 50, 5000)
+
+        data = _fetch_xueqiu_kline(code, timeframe, fetch_count)
         if not data:
             return {}
-        return {"bars": data, "count": len(data)}
+
+        # 日期过滤
+        from app.data_sources.provider import filter_bars_by_date
+        if start_date or end_date:
+            data = filter_bars_by_date(data, start_date, end_date)
+
+        return {"bars": data, "count": len(data)} if data else {}
 
     def fetch_ticker(self, code: str, timeout: int = 8) -> Optional[Dict[str, Any]]:
         """获取单只股票实时行情"""

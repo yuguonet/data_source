@@ -251,22 +251,26 @@ class SinaDataSource:
         adj: str = "qfq", timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
-        if start_date:
-            from app.data_sources.provider import calc_kline_count
-            count = calc_kline_count(timeframe, start_date, end_date)
-
         sc = to_sina_code(code)
         if not sc:
             return {}
         scale = _SINA_TF_TO_SCALE.get(timeframe)
         if scale is None:
             return {}
+        # 有日期范围时，取最大可用量再过滤（新浪 API 最多约 2000 根）
+        fetch_count = 2000 if (start_date or end_date) else count
         if timeframe != "1D":
-            bars = self._fetch_minute_kline(sc, scale, count, timeout)
+            bars = self._fetch_minute_kline(sc, scale, fetch_count, timeout)
         else:
-            bars = self._fetch_raw_daily_kline(sc, count, timeout)
+            bars = self._fetch_raw_daily_kline(sc, fetch_count, timeout)
         if bars and adj in ("qfq", "hfq"):
             bars = _apply_fwd_adjust(bars, code)
+
+        # 日期过滤
+        if bars and (start_date or end_date):
+            from app.data_sources.provider import filter_bars_by_date
+            bars = filter_bars_by_date(bars, start_date, end_date)
+
         if not bars:
             return {}
         return {"bars": bars, "count": len(bars)}

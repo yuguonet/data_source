@@ -260,6 +260,43 @@ def calc_kline_count(timeframe: str, start_date: str, end_date: str = "") -> int
 
 
 # ================================================================
+# K线日期过滤 — 供 Provider 在 fetch_kline 中过滤日期范围
+# ================================================================
+
+def filter_bars_by_date(
+    bars: List[Dict[str, Any]],
+    start_date: str = "",
+    end_date: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    按日期范围过滤 K 线数据。
+
+    Provider 从 API 拿到全量数据后，用此函数截取 [start_date, end_date] 区间。
+
+    Args:
+        bars:       K 线列表，每个元素必须有 "time" 键（格式 "YYYY-MM-DD" 或 "YYYY-MM-DD HH:MM:SS"）
+        start_date: 起始日期 "YYYY-MM-DD"，为空不过滤起始
+        end_date:   结束日期 "YYYY-MM-DD"，为空不过滤截止
+
+    Returns:
+        过滤后的 K 线列表（保持原序）
+    """
+    if not bars or (not start_date and not end_date):
+        return bars
+
+    # 统一取日期前10字符做比较
+    result = []
+    for bar in bars:
+        t = str(bar.get("time", ""))[:10]
+        if start_date and t < start_date:
+            continue
+        if end_date and t > end_date:
+            continue
+        result.append(bar)
+    return result
+
+
+# ================================================================
 # 全市场公共辅助 — 供无原生全市场接口的 Provider 复用
 # ================================================================
 

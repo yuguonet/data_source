@@ -180,10 +180,14 @@ from app.data_sources.provider.adjustment import apply_fwd_adjust as _apply_fwd_
 # 数据获取
 # ================================================================
 
-def _fetch_sohu_kline(code: str, period: str = "d", limit: int = 200) -> Optional[List[Dict[str, Any]]]:
+def _fetch_sohu_kline(code: str, period: str = "d", limit: int = 200,
+                      start_date: str = "", end_date: str = "") -> Optional[List[Dict[str, Any]]]:
     """获取单只股票K线（不复权），支持日线(d)/周线(w)/月线(m)"""
     cn_code = _cn(code)
-    url = f"https://q.stock.sohu.com/hisHq?code=cn_{cn_code}&start=20200101&end=20261231&period={period}"
+    # 使用传入的日期范围，缺省用宽范围兜底
+    sd = start_date.replace("-", "") if start_date else "19900101"
+    ed = end_date.replace("-", "") if end_date else "20261231"
+    url = f"https://q.stock.sohu.com/hisHq?code=cn_{cn_code}&start={sd}&end={ed}&period={period}"
     data = _http_get_json(url)
     if not data or not isinstance(data, list):
         return None
@@ -602,7 +606,7 @@ class SohuDataSource:
         if not period:
             return NotSupportedResult(self.name, "fetch_kline", f"搜狐API不支持 {timeframe}")
 
-        data = _fetch_sohu_kline(code, period, count)
+        data = _fetch_sohu_kline(code, period, count, start_date, end_date)
         if not data:
             return {}
 

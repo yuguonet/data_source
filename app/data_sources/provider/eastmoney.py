@@ -288,6 +288,7 @@ class EastMoneyDataSource:
             count = calc_kline_count(timeframe, start_date, end_date)
         from datetime import date as _date
         em_end = end_date.replace("-", "") if end_date else _date.today().strftime("%Y%m%d")
+        em_beg = start_date.replace("-", "") if start_date else "19900101"
 
         secid = _to_eastmoney_secid(code)
         if not secid:
@@ -308,6 +309,7 @@ class EastMoneyDataSource:
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
                 "klt": klt,
                 "fqt": _EM_FQT.get(adj, 1),
+                "beg": em_beg,
                 "end": em_end,
                 "lmt": min(int(count), 5000),
             },

@@ -908,7 +908,10 @@ def process_batch(
         if _INTERRUPTED:
             break
 
-        raw_key = _prefix_map.get(code, code)
+        # symbols 格式 "sh600519"，coordinator 返回纯数字 "600519"
+        # 需要去掉前缀再查 _prefix_map
+        code_digits = strip_market_prefix(code)
+        raw_key = _prefix_map.get(code_digits, code_digits)
         bars = raw_by_symbol.get(raw_key, [])
         if not bars:
             stats["no_data"] += 1
