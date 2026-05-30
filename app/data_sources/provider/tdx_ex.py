@@ -26,7 +26,7 @@ API来源 & 最新信息:
   - fetch_batch_quotes: 同上，vol已×100转"股"
   - fetch_kline: pytdx返回的vol单位是"股"（注意:行情和K线的vol单位不同!）
   - 价格字段直接是"元"，不需要÷
-  - 复权: 不复权数据通过 TDX 除权除息数据(adjustment模块)转前复权
+  - 复权: 仅支持不复权
 """
 
 from __future__ import annotations
@@ -224,7 +224,6 @@ _CANDIDATE_SERVERS: List[Tuple[str, int, str]] = [
 # ================================================================
 # 前复权（共享模块）
 # ================================================================
-from app.data_sources.provider.adjustment import apply_fwd_adjust as _apply_fwd_adjust
 
 
 # [并发常量] 最大并发线程数 — Coordinator.allocate_threads() 据此分配 worker。
@@ -684,7 +683,7 @@ class TdxExDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "15m", count: int = 300,
-        adj: str = "", timeout: int = 10,
+        timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """获取单只股票K线，支持 1m/5m/15m/30m/1H/1D/1W"""
@@ -710,9 +709,6 @@ class TdxExDataSource:
         from app.data_sources.provider import filter_bars_by_date
         if start_date or end_date:
             data = filter_bars_by_date(data, start_date, end_date)
-
-        if adj == "qfq":
-            data = _apply_fwd_adjust(data, code)
 
         return {"bars": data, "count": len(data)} if data else {}
 

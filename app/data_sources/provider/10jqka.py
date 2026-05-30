@@ -247,7 +247,7 @@ class ThsDataSource:
                     "kline_batch": True, "quote": True, "quote_priority": 25,
                     "batch_quote": False, "batch_quote_priority": 30, "hk": False, "markets": {"CNStock"}}
 
-    def fetch_kline(self, code, timeframe="1D", count=300, adj="", timeout=10, start_date="", end_date="") -> Dict[str, Any]:
+    def fetch_kline(self, code, timeframe="1D", count=300, timeout=10, start_date="", end_date="") -> Dict[str, Any]:
         if start_date:
             from app.data_sources.provider import calc_kline_count; count = calc_kline_count(timeframe, start_date, end_date)
         params = _to_ths_params(code)
@@ -267,7 +267,7 @@ class ThsDataSource:
         # ── 日/周/月: /v2/line/ K线接口（原生支持复权） ──
         tf_adj = _TF_ADJ_MAP.get(timeframe)
         if not tf_adj: return {}
-        path_code = tf_adj.get(adj, tf_adj.get("", "00"))
+        path_code = tf_adj.get("", "00")
         # 有日期范围时用大窗口取全量再过滤，否则按 count 取
         fetch_limit = 5000 if (start_date or end_date) else min(int(count), 800)
         url = "https://d.10jqka.com.cn/v2/line/hs_{}/{}/last{}.js".format(digits, path_code, fetch_limit)

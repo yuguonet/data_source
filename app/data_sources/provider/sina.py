@@ -200,7 +200,6 @@ def _fetch_sina_kline_hisdata(sc: str, count: int, timeout: int) -> List[Dict[st
 
 
 # ═══════════════ 前复权（共享模块）═══════════════
-from app.data_sources.provider.adjustment import apply_fwd_adjust as _apply_fwd_adjust
 
 
 # [并发常量] 最大并发线程数 — Coordinator.allocate_threads() 据此分配 worker。
@@ -248,7 +247,7 @@ class SinaDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 300,
-        adj: str = "", timeout: int = 10,
+        timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         sc = to_sina_code(code)
@@ -263,8 +262,6 @@ class SinaDataSource:
             bars = self._fetch_minute_kline(sc, scale, fetch_count, timeout)
         else:
             bars = self._fetch_raw_daily_kline(sc, fetch_count, timeout)
-        if bars and adj in ("qfq", "hfq"):
-            bars = _apply_fwd_adjust(bars, code)
 
         # 日期过滤
         if bars and (start_date or end_date):

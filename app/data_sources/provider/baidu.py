@@ -23,7 +23,7 @@ API来源 & 最新信息:
 单位注意（重要）:
   - fetch_kline: volume(parts[4])直接是"股"，不需要×100
   - 价格字段直接是"元"，不需要÷
-  - 不支持前/后复权（API不返回复权因子）
+  - 复权: API返回前复权数据，自动通过新浪因子还原为不复权
   - prevClose在parts[11]（可能为空）
 """
 
@@ -41,7 +41,9 @@ from typing import Any, Dict, List, Optional
 
 _TZ_CN = timezone(timedelta(hours=8))
 
+from app.data_sources.normalizer import normalize_cn_code
 from app.data_sources.provider import register, NotSupportedResult
+from app.data_sources.provider.adjustment import reverse_fwd_adjust as _reverse_fwd_adjust
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -232,7 +234,8 @@ class BaiduDataSource:
     百度股市通数据源 — A股数据源（priority=50）。
 
     能力:
-      - K线: 日线/周线/月线（完整历史）
+      - K线: 日线/周线/月线（完整历史）+ 分钟线
+      - 复权: API返回前复权数据，自动通过新浪因子还原为不复权
       - 行情: 单只/批量实时行情
       - 全市场批量: 并发获取全市场K线
 
@@ -276,7 +279,7 @@ class BaiduDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 200,
-        adj: str = "", timeout: int = 10,
+        timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """获取单只股票K线。支持 1D/1W/1M。"""
@@ -294,6 +297,10 @@ class BaiduDataSource:
             data = filter_bars_by_date(data, start_date, end_date)
         elif count and len(data) > count:
             data = data[-count:]
+
+        # 复权处理: 百度API返回前复权数据，还原为不复权
+        if data:
+            data = _reverse_fwd_adjust(data, code)
 
         return {"bars": data, "count": len(data)} if data else {}
 

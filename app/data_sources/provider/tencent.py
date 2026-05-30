@@ -190,7 +190,7 @@ class TencentDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 300,
-        adj: str = "", timeout: int = 10,
+        timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         if start_date:
@@ -214,7 +214,7 @@ class TencentDataSource:
             sd = start_date if start_date else ""
             ed = end_date if end_date else ""
             # adj: "qfq"=前复权, "hfq"=后复权, ""=不复权
-            params = {"param": f"{c},{tc_tf},{sd},{ed},{int(count)},{adj}"}
+            params = {"param": f"{c},{tc_tf},{sd},{ed},{int(count)},"}
 
         resp = requests.get(
             url, headers=get_request_headers(referer=_tc_kline_referers.next()),
@@ -245,7 +245,7 @@ class TencentDataSource:
         else:
             # fqkline 返回的 key 随 adj 变化:
             #   adj="qfq" → "qfqday", adj="hfq" → "hfqday", adj="" → "day"
-            adj_key = f"{adj}{tc_tf}" if adj else tc_tf
+            adj_key = tc_tf
             arr = root.get(adj_key)
             if isinstance(arr, list) and arr:
                 rows = arr

@@ -286,12 +286,12 @@ def _is_valid_kline(bars) -> bool:
 # 这两个适配器做的就是这个转换。
 #
 
-def _make_provider_fetch_fn(provider, adj: str = "qfq") -> Callable:
+def _make_provider_fetch_fn(provider) -> Callable:
     """
     K线适配器: 把 Provider.fetch_kline 包装成 Coordinator 能用的 fetch_fn。
 
     签名转换:
-      Provider:  provider.fetch_kline(code, timeframe, count, adj="qfq") -> Dict | NotSupportedResult
+      Provider:  provider.fetch_kline(code, timeframe, count, ) -> Dict | NotSupportedResult
       Coordinator 期望:  fetch_fn(symbol, timeframe, limit) -> Dict | None
 
     转换规则:
@@ -301,11 +301,10 @@ def _make_provider_fetch_fn(provider, adj: str = "qfq") -> Callable:
       - 超时异常 → 重新抛出 → Coordinator 捕获 TimeoutError，触发熔断器
 
     Args:
-        adj: 复权方式 — "qfq"(前复权,默认) / "hfq"(后复权) / ""(不复权)
     """
     def fetch_fn(symbol: str, timeframe: str, limit: int):
         try:
-            result = provider.fetch_kline(symbol, timeframe, limit, adj=adj)
+            result = provider.fetch_kline(symbol, timeframe, limit)
             if not result:  # None / {} / NotSupportedResult 都走这里
                 return None
             return result
@@ -356,7 +355,7 @@ def _discover_sources(
     timeframe: str,
     preferred_source: str = "",
     capability: str = "kline",
-    adj: str = "qfq",
+    
     skip_cb_filter: bool = False,
 ) -> List[Tuple[str, Callable, SourceConfig]]:
     """
@@ -378,7 +377,6 @@ def _discover_sources(
         capability: 能力类型
           - "kline"  → 获取K线数据（默认）
           - "quote"  → 获取实时行情
-        adj: 复权方式（仅 capability="kline" 时生效）
           - "qfq"  → 前复权（默认）
           - "hfq"  → 后复权
           - ""     → 不复权
@@ -409,8 +407,8 @@ def _discover_sources(
     if capability == "quote":
         adapter = _make_provider_quote_fn
     else:
-        # K线适配器: 传入 adj，由适配器闭包捕获
-        adapter = lambda p: _make_provider_fetch_fn(p, adj=adj)
+        # K线适配器
+        adapter = lambda p: _make_provider_fetch_fn(p)
 
     for p in providers:
         # 熔断检查 — 跳过已熔断的源（skip_cb_filter=True 时跳过此检查）
@@ -475,7 +473,7 @@ class Coordinator:
         timeout: float = 15.0,
         preferred_source: str = "",
         sources: Optional[List[Tuple[str, Callable]]] = None,
-        adj: str = "qfq",
+        
     ) -> Dict[str, Any]:
         """
         单股K线获取 — 多源顺序尝试，第一个成功即返回。
@@ -494,7 +492,7 @@ class Coordinator:
             sources:   手动指定源列表（可选）。为 None 时自动从 Provider 层发现。
                        格式: [(name, fetch_fn), ...]
                        fetch_fn 签名: fetch_fn(symbol, timeframe, limit) -> List[Dict] | None
-            adj:       复权方式 — "qfq"(前复权,默认) / "hfq"(后复权) / ""(不复权)
+            （仅支持不复权）
 
         Returns:
             Dict — 成功时返回 {"symbol": str, "bars": List[Dict], "source": str}，
@@ -519,7 +517,7 @@ class Coordinator:
             else:
                 available = self._get_available_sources(market, source_map)
         else:
-            discovered = _discover_sources(market, timeframe, preferred_source, adj=adj)
+            discovered = _discover_sources(market, timeframe, preferred_source)
             if not discovered:
                 logger.warning("[协助层] 市场 %s 无可用源", market)
                 return {}
@@ -1195,7 +1193,7 @@ class Coordinator:
         market: str = "",
         timeframe: str = "1D",
         count: int = 500,
-        adj: str = "qfq",
+        
         timeout: float = 60.0,
         preferred_source: str = "",
         start_date: str = "",
@@ -1225,7 +1223,6 @@ class Coordinator:
             market: 市场名称（"CNStock" / "HKStock" / ...）
             timeframe: K线周期（"1D" / "5m" / ...）
             count: 每只股票的K线条数
-            adj: 复权方式（"qfq" / "hfq" / ""）
             timeout: 总超时（秒），兜底安全阀
             preferred_source: 指定首选源
             start_date: 起始日期
@@ -1506,7 +1503,7 @@ class Coordinator:
                 _fetch_future = _mkline_timeout_pool.submit(
                     provider.fetch_kline,
                     code=strip_market_prefix(sym), timeframe=timeframe, count=count,
-                    adj=adj, timeout=int(_PER_TASK_TIMEOUT),
+                    timeout=int(_PER_TASK_TIMEOUT),
                     start_date=start_date, end_date=end_date,
                 )
                 try:

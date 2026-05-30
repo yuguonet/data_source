@@ -280,7 +280,7 @@ class EastMoneyDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 300,
-        adj: str = "", timeout: int = 10,
+        timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         if start_date:
@@ -308,7 +308,7 @@ class EastMoneyDataSource:
                 "fields1": "f1,f2,f3",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
                 "klt": klt,
-                "fqt": _EM_FQT.get(adj, 1),
+                "fqt": 1,
                 "beg": em_beg,
                 "end": em_end,
                 "lmt": min(int(count), 5000),

@@ -350,7 +350,7 @@ class XueqiuDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "15m", count: int = 200,
-        adj: str = "", timeout: int = 10,
+        timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """获取单只股票K线，支持 1m/5m/15m/30m/1H/1D/1W"""
@@ -368,7 +368,7 @@ class XueqiuDataSource:
             fetch_count = calc_kline_count(timeframe, start_date, today)
             fetch_count = min(fetch_count + 50, 5000)
 
-        data = _fetch_xueqiu_kline(code, timeframe, fetch_count, adj=adj)
+        data = _fetch_xueqiu_kline(code, timeframe, fetch_count, adj="")
         if not data:
             return {}
 

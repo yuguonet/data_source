@@ -55,7 +55,7 @@ API来源 & 最新信息:
   - fetch_ticker / fetch_batch_quotes: volume 返回"股"（代码中总手×100）
   - 价格字段直接是"元"，不需要÷
   - amount 字段单位为"万元"
-  - 复权: 不复权数据通过 TDX 除权除息数据(adjustment模块)转前复权
+  - 复权: 仅支持不复权
 """
 
 from __future__ import annotations
@@ -173,7 +173,6 @@ def _cn(code: str) -> str:
 # ================================================================
 # 前复权（共享模块）
 # ================================================================
-from app.data_sources.provider.adjustment import apply_fwd_adjust as _apply_fwd_adjust
 
 
 # ================================================================
@@ -579,7 +578,7 @@ class SohuDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 200,
-        adj: str = "", timeout: int = 10,
+        timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """获取单只股票K线。支持日/周/月线 + 5m/15m/30m/60m历史分钟线 + 当日1m分时。"""
@@ -597,8 +596,6 @@ class SohuDataSource:
             data = _fetch_sohu_minute_kline(code, timeframe, count)
             if not data:
                 return {}
-            if adj == "qfq":
-                data = _apply_fwd_adjust(data, code)
             return {"bars": data, "count": len(data)}
 
         # 日/周/月线 (原有逻辑)
@@ -611,8 +608,6 @@ class SohuDataSource:
             return {}
 
         # 前复权处理
-        if adj == "qfq":
-            data = _apply_fwd_adjust(data, code)
 
         return {"bars": data, "count": len(data)}
 

@@ -19,7 +19,7 @@ API来源 & 最新信息:
 单位注意（重要）:
   - _em_trends2_raw: volume 返回的是原始值，代码中已×100转"股"
   - 价格字段直接是"元"，不需要÷
-  - 复权: 不复权数据通过 TDX 除权除息数据(adjustment模块)转前复权
+  - 复权: 仅支持不复权
 """
 
 from __future__ import annotations
@@ -283,7 +283,6 @@ def _last_n_bars(klines: list, n: int = BAR_LIMIT) -> Optional[list]:
 # ================================================================
 # 前复权（共享模块）
 # ================================================================
-from app.data_sources.provider.adjustment import apply_fwd_adjust
 
 
 # ================================================================
@@ -473,7 +472,7 @@ class EmTrends2DataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "15m", count: int = 200,
-        adj: str = "", timeout: int = 10,
+        timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """
@@ -511,8 +510,6 @@ class EmTrends2DataSource:
                 continue
 
         # 前复权处理
-        if adj == "qfq" and result:
-            result = apply_fwd_adjust(result, code)
 
         out = result[-count:] if len(result) > count else result
         return {"bars": out, "count": len(out)} if out else {}
