@@ -473,7 +473,7 @@ class EmTrends2DataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "15m", count: int = 200,
-        adj: str = "qfq", timeout: int = 10,
+        adj: str = "", timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """

@@ -190,7 +190,7 @@ class TencentDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 300,
-        adj: str = "qfq", timeout: int = 10,
+        adj: str = "", timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         if start_date:
@@ -213,7 +213,8 @@ class TencentDataSource:
             # fqkline 原生支持日期范围: param=code,period,start,end,count,adj
             sd = start_date if start_date else ""
             ed = end_date if end_date else ""
-            params = {"param": f"{c},{tc_tf},{sd},{ed},{int(count)},{adj or 'qfq'}"}
+            # adj: "qfq"=前复权, "hfq"=后复权, ""=不复权
+            params = {"param": f"{c},{tc_tf},{sd},{ed},{int(count)},{adj}"}
 
         resp = requests.get(
             url, headers=get_request_headers(referer=_tc_kline_referers.next()),
@@ -242,10 +243,14 @@ class TencentDataSource:
         if endpoint == "mkline":
             rows = root.get(tc_tf)
         else:
-            arr = root.get(tc_tf)
+            # fqkline 返回的 key 随 adj 变化:
+            #   adj="qfq" → "qfqday", adj="hfq" → "hfqday", adj="" → "day"
+            adj_key = f"{adj}{tc_tf}" if adj else tc_tf
+            arr = root.get(adj_key)
             if isinstance(arr, list) and arr:
                 rows = arr
             if rows is None:
+                # 兜底: 按后缀匹配
                 for k, v in root.items():
                     if isinstance(v, list) and v and str(k).lower().endswith(tc_tf):
                         rows = v

@@ -170,11 +170,16 @@ _XQ_TF_TO_PERIOD = {
 }
 
 
-def _fetch_xueqiu_kline(code: str, timeframe: str = "15m", limit: int = 200) -> Optional[List[Dict[str, Any]]]:
-    """获取单只股票K线数据（前复权），支持多周期。
+def _fetch_xueqiu_kline(code: str, timeframe: str = "15m", limit: int = 200, adj: str = "") -> Optional[List[Dict[str, Any]]]:
+    """获取单只股票K线数据，支持多周期。
 
     支持的周期: 1m, 5m, 15m, 30m, 1H, 1D, 1W
     雪球 API 原生支持这些周期，无需额外聚合。
+
+    adj 复权方式映射:
+      ""   → "normal" (不复权)
+      "qfq" → "before" (前复权)
+      "hfq" → "after"  (后复权)
     """
     symbol = _to_xueqiu_symbol(code)
     if not symbol:
@@ -184,13 +189,17 @@ def _fetch_xueqiu_kline(code: str, timeframe: str = "15m", limit: int = 200) -> 
     if not period:
         return None  # 不支持的周期
 
+    # adj → 雪球 type 参数
+    _adj_map = {"": "normal", "qfq": "before", "hfq": "after"}
+    xq_type = _adj_map.get(adj, "normal")
+
     try:
         url = "https://stock.xueqiu.com/v5/stock/chart/kline.json"
         params = {
             "symbol": symbol,
             "begin": int(time.time() * 1000),
             "period": period,
-            "type": "before",  # 前复权
+            "type": xq_type,
             "count": f"-{limit}",
             "indicator": "kline",
         }
@@ -341,10 +350,10 @@ class XueqiuDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "15m", count: int = 200,
-        adj: str = "qfq", timeout: int = 10,
+        adj: str = "", timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
-        """获取单只股票K线（前复权），支持 1m/5m/15m/30m/1H/1D/1W"""
+        """获取单只股票K线，支持 1m/5m/15m/30m/1H/1D/1W"""
         if timeframe not in _XQ_TF_TO_PERIOD:
             return NotSupportedResult(self.name, "fetch_kline", f"不支持 {timeframe} 周期")
 
@@ -359,7 +368,7 @@ class XueqiuDataSource:
             fetch_count = calc_kline_count(timeframe, start_date, today)
             fetch_count = min(fetch_count + 50, 5000)
 
-        data = _fetch_xueqiu_kline(code, timeframe, fetch_count)
+        data = _fetch_xueqiu_kline(code, timeframe, fetch_count, adj=adj)
         if not data:
             return {}
 

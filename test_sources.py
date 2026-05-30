@@ -142,7 +142,7 @@ class TencentSource(SourceAdapter):
         """腾讯日K线 — web.ifzq.gtimg.cn"""
         text = _get(
             "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
-            params={"param": f"{code},day,,,{count},qfq"},
+            params={"param": f"{code},day,,,{count},"},
             referer="https://gu.qq.com/",
             timeout=10,
         )

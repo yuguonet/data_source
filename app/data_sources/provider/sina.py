@@ -248,7 +248,7 @@ class SinaDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 300,
-        adj: str = "qfq", timeout: int = 10,
+        adj: str = "", timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         sc = to_sina_code(code)

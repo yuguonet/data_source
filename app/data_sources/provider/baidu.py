@@ -276,7 +276,7 @@ class BaiduDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 200,
-        adj: str = "qfq", timeout: int = 10,
+        adj: str = "", timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """获取单只股票K线。支持 1D/1W/1M。"""

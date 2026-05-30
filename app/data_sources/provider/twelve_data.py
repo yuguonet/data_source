@@ -190,7 +190,7 @@ class TwelveDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 300,
-        adj: str = "qfq", timeout: int = 15,
+        adj: str = "", timeout: int = 15,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         if start_date:

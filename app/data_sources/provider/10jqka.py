@@ -221,7 +221,7 @@ class ThsDataSource:
                     "kline_batch": True, "quote": True, "quote_priority": 25,
                     "batch_quote": False, "batch_quote_priority": 30, "hk": False, "markets": {"CNStock"}}
 
-    def fetch_kline(self, code, timeframe="1D", count=300, adj="qfq", timeout=10, start_date="", end_date="") -> Dict[str, Any]:
+    def fetch_kline(self, code, timeframe="1D", count=300, adj="", timeout=10, start_date="", end_date="") -> Dict[str, Any]:
         if start_date:
             from app.data_sources.provider import calc_kline_count; count = calc_kline_count(timeframe, start_date, end_date)
         params = _to_ths_params(code)

@@ -684,7 +684,7 @@ class TdxExDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "15m", count: int = 300,
-        adj: str = "qfq", timeout: int = 10,
+        adj: str = "", timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """获取单只股票K线，支持 1m/5m/15m/30m/1H/1D/1W"""

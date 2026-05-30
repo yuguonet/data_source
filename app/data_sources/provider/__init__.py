@@ -421,7 +421,7 @@ class BaseDataSource(Protocol):
 
     def fetch_kline(
         self, code: str, timeframe: str, count: int = 300,
-        adj: str = "qfq", timeout: int = 10,
+        adj: str = "", timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """
@@ -435,7 +435,7 @@ class BaseDataSource(Protocol):
             code:      股票代码（如 "SH600519", "600519"）
             timeframe: K线周期（如 "1D", "5m", "1H"）
             count:     请求数据条数（start_date 优先时忽略）
-            adj:       复权方式（"qfq" 前复权 / "hfq" 后复权 / "" 不复权）
+            adj:       复权方式（"" 不复权 / "qfq" 前复权 / "hfq" 后复权）
             timeout:   请求超时秒数
             start_date: 起始日期（"YYYY-MM-DD"），提供时用交易日历反推 count
             end_date:   结束日期（"YYYY-MM-DD"），部分数据源支持精确截断

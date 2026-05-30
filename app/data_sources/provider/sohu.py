@@ -579,7 +579,7 @@ class SohuDataSource:
 
     def fetch_kline(
         self, code: str, timeframe: str = "1D", count: int = 200,
-        adj: str = "qfq", timeout: int = 10,
+        adj: str = "", timeout: int = 10,
         start_date: str = "", end_date: str = "",
     ) -> Dict[str, Any]:
         """获取单只股票K线。支持日/周/月线 + 5m/15m/30m/60m历史分钟线 + 当日1m分时。"""
