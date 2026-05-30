@@ -25,12 +25,20 @@ API来源 & 最新信息:
   - fetch_ticker: ✅ 单只实时行情（取K线最后一条）
   - fetch_batch_quotes: ❌ 不支持（返回NotSupportedResult）
 
+复权说明（重要）:
+  - /v2/line/ 接口通过 URL 路径段原生支持三种复权方式:
+    /v2/line/hs_{code}/00/last{N}.js → 不复权（原始数据）
+    /v2/line/hs_{code}/01/last{N}.js → 前复权
+    /v2/line/hs_{code}/02/last{N}.js → 后复权
+  - /v2/time/ 分时接口仅返回当天数据，无除权问题，无需复权处理
+  - adj=""（不复权）: 使用 /00/ 路径
+  - adj="qfq"（前复权）: 使用 /01/ 路径
+  - adj="hfq"（后复权）: 使用 /02/ 路径
 
 单位注意（重要）:
   - /v2/line/ K线: volume(parts[5])直接是"股"，价格"元"
   - /v2/time/ 分时: price=现价, cum_amount=累计额, avg_price=均价, volume=成交量(股)
   - fetch_ticker: 无change/changePercent字段（从K线推的，只能返回0）
-  - 复权: 不复权数据通过 除权除息数据(adjustment模块)转前复权
 
 溢出修正:
   - /v2/time/ 接口在盘后(15:01~15:30)仍返回收盘价平移+极小成交量的无效tick
@@ -55,8 +63,26 @@ logger = get_logger(__name__)
 _ths_quote_limiter = RateLimiter(min_interval=0.6, jitter_min=0.2, jitter_max=1.0)
 
 _THS_MARKET = {"SH": 1, "SZ": 0, "BJ": 0}
-# 日线/周线走 /v2/line/ 接口（分钟线走 /v2/time/ 专用逻辑，不在此映射）
-_THS_PERIOD = {"1D": 1, "1W": 10}
+
+_THS_MIN_TFS = {"1m", "5m", "15m", "30m", "1H"}
+
+# 10jqka /v2/line/ 路径编码: 第一位=周期(0=日,1=周,2=月), 第二位=复权(0=不复权,1=前复权,2=后复权)
+# 例: /01/ = 日线+前复权, /10/ = 周线+不复权, /21/ = 月线+前复权
+#
+# | 路径 | 第一位(周期) | 第二位(复权) | 含义        |
+# |------|-------------|-------------|------------|
+# | /00/ | 0=日        | 0=不复权     | 不复权日线   |
+# | /01/ | 0=日        | 1=前复权     | 前复权日线   |
+# | /02/ | 0=日        | 2=后复权     | 后复权日线   |
+# | /10/ | 1=周        | 0=不复权     | 不复权周线   |
+# | /11/ | 1=周        | 1=前复权     | 前复权周线   |
+# | /21/ | 2=月        | 1=前复权     | 前复权月线   |
+#
+_TF_ADJ_MAP = {
+    "1D": {"": "00", "qfq": "01", "hfq": "02"},
+    "1W": {"": "10", "qfq": "11", "hfq": "12"},
+    "1M": {"": "20", "qfq": "21", "hfq": "22"},
+}
 
 _THS_MIN_TFS = {"1m", "5m", "15m", "30m", "1H"}
 
@@ -199,8 +225,8 @@ def _aggregate_tick_bars(tick_bars: List[Dict[str, Any]], timeframe: str) -> Lis
     return result
 
 
-# ═══════════════ 前复权（共享模块）═══════════════
-from app.data_sources.provider.adjustment import apply_fwd_adjust as _apply_fwd_adjust
+# ═══════════════ 复权说明 ════════════════
+# 10jqka /v2/line/ 接口通过 URL 路径段原生支持复权，无需额外计算
 
 
 # [并发常量] 最大并发线程数 — Coordinator.allocate_threads() 据此分配 worker。
@@ -234,19 +260,17 @@ class ThsDataSource:
             if not tick_bars: return {}
             bars = _aggregate_tick_bars(tick_bars, timeframe)
             if not bars: return {}
-            # 前复权
-            if adj in ("qfq", "hfq"):
-                bars = _apply_fwd_adjust(bars, code)
+            # 分时数据仅当天，无除权问题，无需复权处理
             result = bars[-count:] if len(bars) > count else bars
             return {"bars": result, "count": len(result)}
 
-        # ── 日/周/月: /v2/line/ K线接口 ──
-        period = _THS_PERIOD.get(timeframe)
-        if period is None: return {}
-        p_str = str(period).zfill(2) if period < 10 else str(period)
+        # ── 日/周/月: /v2/line/ K线接口（原生支持复权） ──
+        tf_adj = _TF_ADJ_MAP.get(timeframe)
+        if not tf_adj: return {}
+        path_code = tf_adj.get(adj, tf_adj.get("", "00"))
         # 有日期范围时用大窗口取全量再过滤，否则按 count 取
         fetch_limit = 5000 if (start_date or end_date) else min(int(count), 800)
-        url = "https://d.10jqka.com.cn/v2/line/hs_{}/{}/last{}.js".format(digits, p_str, fetch_limit)
+        url = "https://d.10jqka.com.cn/v2/line/hs_{}/{}/last{}.js".format(digits, path_code, fetch_limit)
         try:
             resp = get_shared_session().get(url, headers=get_request_headers(referer="https://stockpage.10jqka.com/"), timeout=timeout)
             resp.encoding = "utf-8"; text = resp.text or ""
@@ -280,8 +304,7 @@ class ThsDataSource:
             out = filter_bars_by_date(out, start_date, end_date)
         elif len(out) > count:
             out = out[-count:]
-        if adj in ("qfq", "hfq"):
-            out = _apply_fwd_adjust(out, code)
+        # 复权已通过 URL 路径段(/00/,/01/,/02/)原生处理，无需额外调整
         return {"bars": out, "count": len(out)} if out else {}
 
     def fetch_ticker(self, code, timeout=8):
