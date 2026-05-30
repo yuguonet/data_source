@@ -461,6 +461,59 @@ class Coordinator:
         self._lock = threading.Lock()
 
     # ================================================================
+    # 外部 prepare 接口 — 提前初始化数据源 cookie 等前置依赖
+    # ================================================================
+
+    def prepare(self, market: str = "", providers: Optional[List[str]] = None) -> Dict[str, bool]:
+        """
+        提前初始化数据源前置依赖（cookie、服务器探测等）。
+
+        由外部调用方在应用启动时主动触发，确保各数据源就绪，
+        避免首次请求时因 cookie 获取/服务器探测导致延迟。
+
+        Args:
+            market:   市场名称（"CNStock" / "HKStock"），为空时初始化所有已注册源
+            providers: 指定要初始化的源名称列表（如 ["xueqiu", "tdx_ex"]），
+                       为空时根据 market 过滤
+
+        Returns:
+            {源名称: 是否就绪} — 每个源的 prepare() 返回值
+        """
+        from app.data_sources.provider import get_providers, get_provider
+
+        results: Dict[str, bool] = {}
+
+        if providers:
+            # 指定源名称列表
+            target_providers = []
+            for name in providers:
+                p = get_provider(name)
+                if p:
+                    target_providers.append(p)
+                else:
+                    results[name] = False
+                    logger.warning("[Coordinator.prepare] 源 %s 未注册", name)
+        else:
+            # 按 market 过滤
+            target_providers = get_providers(market=market) if market else get_providers()
+
+        for p in target_providers:
+            try:
+                ok = p.prepare() if hasattr(p, 'prepare') else True
+                results[p.name] = ok
+                if not ok:
+                    logger.warning("[Coordinator.prepare] %s prepare() 返回 False", p.name)
+            except Exception as e:
+                results[p.name] = False
+                logger.warning("[Coordinator.prepare] %s prepare() 异常: %s", p.name, e)
+
+        ready = sum(1 for v in results.values() if v)
+        logger.info("[Coordinator.prepare] 完成: %d/%d 就绪 | %s",
+                    ready, len(results),
+                    " | ".join(f"{n}={'✓' if v else '✗'}" for n, v in results.items()))
+        return results
+
+    # ================================================================
     # 模式 A: 单股K线 — 多源顺序尝试，第一个成功即返回
     # ================================================================
 

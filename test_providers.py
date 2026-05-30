@@ -59,11 +59,22 @@ def _build_mock_app():
     def to_raw_digits(symbol):
         return "".join(c for c in (symbol or "") if c.isdigit()).zfill(6)
 
+    def add_market_prefix(code, market="CNStock"):
+        d = "".join(c for c in (code or "") if c.isdigit()).zfill(6)
+        if d.startswith(("6", "9")): return f"SH{d}"
+        if d.startswith(("0", "3")): return f"SZ{d}"
+        return f"SZ{d}"
+
+    def strip_market_prefix(code):
+        return "".join(c for c in (code or "") if c.isdigit()).zfill(6)
+
     nm = types.ModuleType("app.data_sources.normalizer")
     nm.normalize_cn_code = normalize_cn_code
     nm.normalize_hk_code = normalize_hk_code
     nm.detect_market = detect_market
     nm.to_raw_digits = to_raw_digits
+    nm.add_market_prefix = add_market_prefix
+    nm.strip_market_prefix = strip_market_prefix
     sys.modules["app.data_sources.normalizer"] = nm
 
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app", "data_sources"))
@@ -96,28 +107,15 @@ _build_mock_app()
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 PROVIDER_DIR = os.path.join(PROJECT_ROOT, "app", "data_sources", "provider")
 sys.path.insert(0, PROJECT_ROOT)
-sys.path.insert(0, os.path.join(PROJECT_ROOT, "app", "data_sources"))
 
 import logging
 logging.disable(logging.CRITICAL)
-sys.path.insert(0, PROVIDER_DIR)
 import importlib
-provider_init = importlib.import_module("__init__")
-sys.modules["app.data_sources.provider"] = provider_init
-for f in os.listdir(PROVIDER_DIR):
-    if f.endswith(".py") and f != "__init__.py":
-        try:
-            m = importlib.import_module(f[:-3])
-            sys.modules[f"app.data_sources.provider.{f[:-3]}"] = m
-        except Exception: pass
-from importlib import import_module as _imp
+
+# 正确注册 app.data_sources 为包（带 __path__），使 provider 能被 autodiscover()
+sys.modules["app.data_sources"].__path__ = [os.path.join(PROJECT_ROOT, "app", "data_sources")]
+provider_init = importlib.import_module("app.data_sources.provider")
 _registry = getattr(provider_init, "_registry", None)
-for f in sorted(os.listdir(PROVIDER_DIR)):
-    if f.endswith(".py") and f != "__init__.py":
-        n = f"provider.{f[:-3]}"
-        if n not in sys.modules:
-            try: importlib.import_module(n)
-            except Exception: pass
 logging.disable(logging.NOTSET)
 
 # ================================================================
@@ -302,7 +300,7 @@ def test_kline(providers, codes, timeframe="1D", count=5):
         # 收集各源数据
         results = {}
         for p in providers:
-            r = _run(p.fetch_kline, code, timeframe, count, "qfq", 15)
+            r = _run(p.fetch_kline, code, timeframe, count, 15)
             results[p.name] = r
 
         # 提取有效数据
@@ -372,10 +370,11 @@ def test_kline(providers, codes, timeframe="1D", count=5):
                 else:
                     print(f"  │  {name:<14} {'·':>10} {'·':>10} {'·':>10} {'·':>10} {'·':>12}")
 
-        # ── 差异汇总: 最新日期各源收盘价对比 ──
+        # ── 差异汇总: 最新日期各源 OHLCV 对比 ──
         if len(src_names) > 1:
             latest = sorted_dates[-1]
             closes = {}
+            volumes = {}
             for name in src_names:
                 bar = date_maps[name].get(latest)
                 if bar:
@@ -385,14 +384,28 @@ def test_kline(providers, codes, timeframe="1D", count=5):
                             closes[name] = float(cv)
                         except (ValueError, TypeError):
                             pass
+                    vv = _bar_field(bar, "volume")
+                    if vv != "—":
+                        try:
+                            volumes[name] = float(vv)
+                        except (ValueError, TypeError):
+                            pass
             if len(closes) > 1:
                 vals = list(closes.values())
                 mx, mn = max(vals), min(vals)
                 diff = mx - mn
                 diff_pct = diff / mn * 100 if mn else 0
                 print(f"  │")
-                parts = [f"{n}={v}" for n, v in closes.items()]
+                parts = [f"{n}={v:.2f}" for n, v in closes.items()]
                 print(f"  │  ⚡ {latest} 收盘差: {diff:.4f} ({diff_pct:.3f}%) → {' vs '.join(parts)}")
+            if len(volumes) > 1:
+                vvals = list(volumes.values())
+                vmx, vmn = max(vvals), min(vvals)
+                if vmn > 0:
+                    vdiff_pct = (vmx - vmn) / vmn * 100
+                    vparts = [f"{n}={_fmt(v, 0)}" for n, v in volumes.items()]
+                    marker = " ⚠️" if vdiff_pct > 10 else ""
+                    print(f"  │  ⚡ {latest} 成交量差: {vdiff_pct:.1f}% → {' vs '.join(vparts)}{marker}")
 
         print(f"  └{'─' * (W - 2)}")
 

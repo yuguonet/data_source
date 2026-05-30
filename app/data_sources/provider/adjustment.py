@@ -9,18 +9,31 @@
 对外暴露:
   - fetch_qfq_factors(code) — 获取前复权因子 [(date, factor), ...]
   - reverse_fwd_adjust(klines, code) — 将前复权K线还原为不复权
+  - unadj_to_qfq(klines, code) — 不复权 → 前复权
+  - unadj_to_hfq(klines, code) — 不复权 → 后复权
 
-缓存: 内存缓存，进程生命周期有效
+缓存策略:
+  - 内存缓存: 进程生命周期有效（_qfq_cache）
+  - 文件缓存: cache/adjustment_factors.json，远端获取失败时使用文件缓存
+  - 启动时: 首次 fetch 自动从文件缓存预热，远端成功后更新文件缓存
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import ssl as _ssl
 import threading
 import urllib.request as _urllib
 from typing import Dict, List, Optional, Tuple
+
+# ================================================================
+# 缓存目录
+# ================================================================
+
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")
+_CACHE_FILE = os.path.join(_CACHE_DIR, "adjustment_factors.json")
 
 # ================================================================
 # HTTP 工具
@@ -66,6 +79,55 @@ def _to_sina_code(code: str) -> Optional[str]:
 
 
 # ================================================================
+# 文件缓存 — 远端获取失败时的兜底
+# ================================================================
+
+_file_cache: Dict[str, List[Tuple[str, float]]] = {}
+_file_cache_loaded = False
+_file_cache_lock = threading.Lock()
+
+
+def _load_file_cache() -> Dict[str, List[Tuple[str, float]]]:
+    """从文件缓存加载因子数据。"""
+    global _file_cache_loaded
+    if _file_cache_loaded:
+        return _file_cache
+    with _file_cache_lock:
+        if _file_cache_loaded:
+            return _file_cache
+        _file_cache_loaded = True
+        try:
+            if os.path.exists(_CACHE_FILE):
+                with open(_CACHE_FILE, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                for code, factors in raw.items():
+                    _file_cache[code] = [(d, float(v)) for d, v in factors]
+        except Exception:
+            pass
+    return _file_cache
+
+
+def _save_file_cache():
+    """将内存中的因子数据持久化到文件缓存。"""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with _file_cache_lock:
+            data = {code: list(factors) for code, factors in _file_cache.items()}
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _update_file_cache_entry(sina_code: str, factors: List[Tuple[str, float]]):
+    """更新单个股票的文件缓存条目。"""
+    with _file_cache_lock:
+        _file_cache[sina_code] = factors
+    # 异步保存到文件（不阻塞当前请求）
+    threading.Thread(target=_save_file_cache, daemon=True).start()
+
+
+# ================================================================
 # 因子获取
 # ================================================================
 
@@ -96,6 +158,11 @@ def fetch_qfq_factors(code: str) -> Optional[List[Tuple[str, float]]]:
       unadj_price = fwd_price * qfq_factor
       最新除权日 factor=1.0，越早的日期 factor 越大。
 
+    缓存策略:
+      1. 内存缓存命中 → 直接返回
+      2. 远端获取成功 → 更新内存 + 文件缓存
+      3. 远端获取失败 → 尝试文件缓存兜底
+
     Returns:
         [(date_str, factor), ...] 按日期降序，失败返回 None
     """
@@ -103,21 +170,34 @@ def fetch_qfq_factors(code: str) -> Optional[List[Tuple[str, float]]]:
     if not sina_code:
         return None
 
+    # 1. 内存缓存命中
     with _cache_lock:
         if sina_code in _qfq_cache:
             return _qfq_cache[sina_code]
 
+    # 2. 确保文件缓存已加载（启动时预热）
+    _load_file_cache()
+
+    # 3. 远端获取
     text = _http_get(f"https://finance.sina.com.cn/realstock/company/{sina_code}/qfq.js")
-    if not text:
-        return None
+    if text:
+        factors = _parse_sina_factor(text, "qfq")
+        if factors:
+            with _cache_lock:
+                _qfq_cache[sina_code] = factors
+            _update_file_cache_entry(sina_code, factors)
+            return factors
 
-    factors = _parse_sina_factor(text, "qfq")
-    if factors:
-        with _cache_lock:
-            _qfq_cache[sina_code] = factors
-    return factors
+    # 4. 远端失败 → 文件缓存兜底
+    with _file_cache_lock:
+        if sina_code in _file_cache:
+            cached = _file_cache[sina_code]
+            if cached:
+                with _cache_lock:
+                    _qfq_cache[sina_code] = cached
+                return cached
 
-
+    return None
 
 
 # ================================================================
@@ -163,10 +243,6 @@ def _extract_date(bar_time) -> str:
 # 复权计算
 # ================================================================
 
-
-
-
-
 def reverse_fwd_adjust(klines: list, code: str) -> list:
     """将前复权K线还原为不复权。
 
@@ -199,6 +275,102 @@ def reverse_fwd_adjust(klines: list, code: str) -> list:
                 "high": round(bar["high"] * factor, 4),
                 "low": round(bar["low"] * factor, 4),
                 "close": round(bar["close"] * factor, 4),
+                "volume": bar["volume"],
+            })
+        else:
+            result.append(bar)
+    return result
+
+
+def unadj_to_qfq(klines: list, code: str) -> list:
+    """不复权 → 前复权。
+
+    公式: fwd_price = unadj_price / qfq_factor
+
+    qfq 因子特点:
+      - 最新除权日 factor=1.0，越早的日期 factor 越大
+      - 不复权数据 / qfq_factor = 前复权数据
+
+    Args:
+        klines: 不复权K线列表
+        code:   股票代码
+
+    Returns:
+        前复权K线列表（新列表），无因子时返回原列表
+    """
+    if not klines:
+        return klines
+
+    factors = fetch_qfq_factors(code)
+    factor_map, sorted_dates, latest_ex = _build_factor_lookup(factors)
+    if not factor_map:
+        return klines
+
+    result = []
+    for bar in klines:
+        bar_date = _extract_date(bar.get("time", ""))
+        factor = _find_factor(sorted_dates, factor_map, bar_date, latest_ex)
+
+        if factor != 1.0:
+            result.append({
+                "time": bar["time"],
+                "open": round(bar["open"] / factor, 4),
+                "high": round(bar["high"] / factor, 4),
+                "low": round(bar["low"] / factor, 4),
+                "close": round(bar["close"] / factor, 4),
+                "volume": bar["volume"],
+            })
+        else:
+            result.append(bar)
+    return result
+
+
+def unadj_to_hfq(klines: list, code: str) -> list:
+    """不复权 → 后复权。
+
+    公式: hfq_price = unadj_price * hfq_factor
+
+    hfq 因子推导:
+      - qfq_factor: 最新除权日=1.0，越早越大
+      - hfq_factor = 最新qfq_factor / 当日qfq_factor
+      - 即: hfq_factor 在最早除权日=1.0，越新越大
+      - 简化: hfq_price = unadj_price * (latest_qfq / qfq_factor)
+
+    Args:
+        klines: 不复权K线列表
+        code:   股票代码
+
+    Returns:
+        后复权K线列表（新列表），无因子时返回原列表
+    """
+    if not klines:
+        return klines
+
+    factors = fetch_qfq_factors(code)
+    factor_map, sorted_dates, latest_ex = _build_factor_lookup(factors)
+    if not factor_map:
+        return klines
+
+    # 最新 qfq 因子（即 factor=1.0 对应的基准）
+    # 实际上 latest_ex 时 factor=1.0，所以 hfq_factor = 1.0 / qfq_factor
+    # 但这会导致最早期的数据 hfq_factor 很大，不直观
+    # 更常见的做法: hfq_factor 以最早除权日为基准=1.0
+    # 即 hfq_factor = earliest_qfq / qfq_factor
+    earliest_qfq = factor_map.get(sorted_dates[0], 1.0) if sorted_dates else 1.0
+
+    result = []
+    for bar in klines:
+        bar_date = _extract_date(bar.get("time", ""))
+        qfq_factor = _find_factor(sorted_dates, factor_map, bar_date, latest_ex)
+
+        if qfq_factor != 1.0:
+            hfq_factor = earliest_qfq / qfq_factor
+            result.append({
+                "time": bar["time"],
+                "open": round(bar["open"] * hfq_factor, 4),
+                "high": round(bar["high"] * hfq_factor, 4),
+                "low": round(bar["low"] * hfq_factor, 4),
+                "close": round(bar["close"] * hfq_factor, 4),
                 "volume": bar["volume"],
             })
         else:

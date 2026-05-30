@@ -83,7 +83,7 @@ def fetch_from_provider(provider_name: str, code: str, count: int = 20) -> Optio
     if not provider:
         return None
     try:
-        result = provider.fetch_kline(code, "1D", count=count, adj="", timeout=15)
+        result = provider.fetch_kline(code, "1D", count=count, timeout=15)
         if not result or not isinstance(result, dict):
             return None
         bars = result.get("bars") or []

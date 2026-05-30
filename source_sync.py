@@ -822,7 +822,6 @@ def process_batch(
     count: int,
     timeout: float,
     preferred_source: str,
-    adj: str,
     price_tolerance: float,
     dry_run: bool,
     retry_path: str,
@@ -849,7 +848,6 @@ def process_batch(
                 market=market,
                 timeframe=timeframe,
                 count=count,
-                adj=adj,
                 timeout=timeout,
                 preferred_source=preferred_source,
                 start_date=start_date,
@@ -1017,8 +1015,7 @@ def main():
         help="Coordinator 全局超时秒数（默认 120）")
     parser.add_argument("--preferred-source", default="",
         help="指定首选数据源")
-    parser.add_argument("--adj", default="", choices=["qfq", "hfq", ""],
-        help="复权方式 (默认不复权)")
+    # 复权: 固定不复权，不对外暴露复权参数
     parser.add_argument("--start-date", default="",
         help="数据起始日期 (YYYY-MM-DD)，默认为当天")
     parser.add_argument("--end-date", default="",
@@ -1137,7 +1134,7 @@ def main():
 ║  类型: {args.type:<8}  市场: {market:<12}                ║
 ║  日期: {start_date} → {end_date}                     ║
 ║  股票: {total} 只  批次: {batch_size}  条数: {count:<8}          ║
-║  复权: {args.adj or '不复权':<8}  超时: {args.timeout:.0f}s                   ║
+║  复权: 不复权      超时: {args.timeout:.0f}s                   ║
 ║  模式: {'重试' if args.retry_only else '主循环'}{'  dry-run' if args.dry_run else ''}                         ║
 ╚═══════════════════════════════════════════════════════╝
 """)
@@ -1174,7 +1171,6 @@ def main():
                     count=count,
                     timeout=args.timeout,
                     preferred_source=args.preferred_source,
-                    adj=args.adj,
                     price_tolerance=args.price_tolerance,
                     dry_run=args.dry_run,
                     retry_path=retry_path,

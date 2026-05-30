@@ -267,7 +267,7 @@ class ThsDataSource:
         # ── 日/周/月: /v2/line/ K线接口（原生支持复权） ──
         tf_adj = _TF_ADJ_MAP.get(timeframe)
         if not tf_adj: return {}
-        path_code = tf_adj.get("", "00")
+        path_code = tf_adj.get("", "00")  # 默认不复权（固定不复权，不对外暴露复权参数）
         # 有日期范围时用大窗口取全量再过滤，否则按 count 取
         fetch_limit = 5000 if (start_date or end_date) else min(int(count), 800)
         url = "https://d.10jqka.com.cn/v2/line/hs_{}/{}/last{}.js".format(digits, path_code, fetch_limit)

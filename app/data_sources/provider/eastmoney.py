@@ -308,7 +308,7 @@ class EastMoneyDataSource:
                 "fields1": "f1,f2,f3",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
                 "klt": klt,
-                "fqt": 1,
+                "fqt": 0,  # 0=不复权（固定不复权，不对外暴露复权参数）
                 "beg": em_beg,
                 "end": em_end,
                 "lmt": min(int(count), 5000),
